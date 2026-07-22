@@ -1,16 +1,41 @@
+version: '3.8'
+
 networks:
   lis-network:
-    external: true
+    driver: bridge
 
 services:
+  # Redis - Cache and session storage
+  redis:
+    image: redis:7-alpine
+    container_name: lis-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - lis-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - redis-data:/data
+
+  # LIS Backend (Laravel + PHP-FPM)
   backend:
     build:
       context: /opt/lis/lis-backend
       dockerfile: Dockerfile.prod
-    image: lis-backend:cebac-current
+    image: lis-backend:latest
     container_name: lis-backend
     restart: unless-stopped
-    env_file: /opt/lis/lis-backend/.env
+    env_file: /opt/lis/lis-backend/.env.prod
+    environment:
+      # Override for Docker environment
+      DB_HOST: 192.168.5.10
+      REDIS_HOST: redis
     ports:
       - "8000:8000"
     networks:
@@ -19,20 +44,28 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD", "php", "-r", "fopen('http://127.0.0.1:8000/health', 'r');"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 20s
+    volumes:
+      - backend-logs:/var/www/storage/logs
 
+
+  # Broker Gateway (NestJS)
   broker-gateway:
     build:
       context: /opt/lis/lis-broker-gateway
       dockerfile: Dockerfile.prod
-    image: lis-broker-gateway:cebac-current
+    image: lis-broker-gateway:latest
     container_name: lis-broker-gateway
     restart: unless-stopped
-    env_file: /opt/lis/lis-broker-gateway/.env
+    env_file: /opt/lis/lis-broker-gateway/.env.prod
+    environment:
+      # Service discovery
+      BACKEND_URL: http://backend:8000
+      REDIS_HOST: redis
     ports:
       - "3001:3001"
     networks:
@@ -40,21 +73,35 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      backend:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/v1/health"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/v1/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 15s
+    volumes:
+      - broker-logs:/app/logs
 
+  # Frontend (Next.js)
   frontend:
     build:
       context: /opt/lis/lis-front-monorepo
-      dockerfile: apps/lis/Dockerfile.prod
-    image: lis-frontend:cebac-current
+      dockerfile: Dockerfile.prod
+    image: lis-frontend:latest
     container_name: lis-frontend
     restart: unless-stopped
-    env_file: /opt/lis/lis-front-monorepo/apps/lis/.env.local
+    env_file: /opt/lis/lis-front-monorepo/apps/lis/.env.prod
+    environment:
+      # Service discovery URLs (internal)
+      NEXT_PUBLIC_API_CORE_URL: http://backend:8000
+      NEXT_PUBLIC_API_AUTH_URL: http://backend:8000
+      NEXT_PUBLIC_API_CATALOG_URL: http://backend:8000
+      NEXT_PUBLIC_API_BROKER_GATEWAY_URL: http://broker-gateway:3001
+      # Cognito (these come from .env.prod)
+      NODE_ENV: production
+      PORT: 3000
     ports:
       - "3000:3000"
     networks:
@@ -62,22 +109,51 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - frontend-logs:/app/.next
 
+  # Clinical Matcher (FastAPI)
   clinical-matcher:
     build:
       context: /opt/lis/lis-clinical-matcher
       dockerfile: Dockerfile.prod
-    image: lis-clinical-matcher:cebac-current
+    image: lis-clinical-matcher:latest
     container_name: lis-clinical-matcher
     restart: unless-stopped
-    env_file: /opt/lis/lis-clinical-matcher/.env
+    env_file: /opt/lis/lis-clinical-matcher/.env.prod
+    environment:
+      # Service discovery
+      BACKEND_URL: http://backend:8000
     ports:
       - "8001:8001"
     networks:
       - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 15s
+    volumes:
+      - matcher-logs:/app/logs
+
+volumes:
+  redis-data:
+    driver: local
+  backend-logs:
+    driver: local
+  broker-logs:
+    driver: local
+  frontend-logs:
+    driver: local
+  matcher-logs:
+    driver: local
