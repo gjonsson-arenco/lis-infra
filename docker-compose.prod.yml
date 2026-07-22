@@ -1,0 +1,83 @@
+networks:
+  lis-network:
+    external: true
+
+services:
+  backend:
+    build:
+      context: /opt/lis/lis-backend
+      dockerfile: Dockerfile.prod
+    image: lis-backend:cebac-current
+    container_name: lis-backend
+    restart: unless-stopped
+    env_file: /opt/lis/lis-backend/.env
+    ports:
+      - "8000:8000"
+    networks:
+      - lis-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  broker-gateway:
+    build:
+      context: /opt/lis/lis-broker-gateway
+      dockerfile: Dockerfile.prod
+    image: lis-broker-gateway:cebac-current
+    container_name: lis-broker-gateway
+    restart: unless-stopped
+    env_file: /opt/lis/lis-broker-gateway/.env
+    ports:
+      - "3001:3001"
+    networks:
+      - lis-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build:
+      context: /opt/lis/lis-front-monorepo
+      dockerfile: apps/lis/Dockerfile.prod
+    image: lis-frontend:cebac-current
+    container_name: lis-frontend
+    restart: unless-stopped
+    env_file: /opt/lis/lis-front-monorepo/apps/lis/.env.local
+    ports:
+      - "3000:3000"
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  clinical-matcher:
+    build:
+      context: /opt/lis/lis-clinical-matcher
+      dockerfile: Dockerfile.prod
+    image: lis-clinical-matcher:cebac-current
+    container_name: lis-clinical-matcher
+    restart: unless-stopped
+    env_file: /opt/lis/lis-clinical-matcher/.env
+    ports:
+      - "8001:8001"
+    networks:
+      - lis-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

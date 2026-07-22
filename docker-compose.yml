@@ -1,0 +1,23 @@
+networks:
+  lis-network:
+    external: true
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: lis-redis
+    restart: unless-stopped
+    networks:
+      - lis-network
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  redis-data:
