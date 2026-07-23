@@ -37,7 +37,7 @@ services:
       retries: 3
       start_period: 20s
     volumes:
-      - backend-logs:/var/www/storage/logs
+      - backend-storage:/var/www/storage
 
 
   # Broker Gateway (NestJS)
@@ -147,7 +147,7 @@ services:
       - matcher-logs:/app/logs
 
 volumes:
-  backend-logs:
+  backend-storage:
     driver: local
   broker-logs:
     driver: local
