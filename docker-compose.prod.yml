@@ -76,17 +76,30 @@ services:
     build:
       context: /opt/lis/lis-front-monorepo
       dockerfile: Dockerfile.prod
+      args:
+        # NEXT_PUBLIC_* vars are inlined at build time, so they have to
+        # come in as build args, not container environment — see
+        # Dockerfile.prod. Sourced from the shell env, populated by
+        # `set -a && source apps/lis/.env.prod` before `docker compose build`.
+        - NEXT_PUBLIC_COGNITO_DOMAIN
+        - NEXT_PUBLIC_COGNITO_CLIENT_ID
+        - NEXT_PUBLIC_COGNITO_REDIRECT_URI
+        - NEXT_PUBLIC_COGNITO_LOGOUT_URI
+        - NEXT_PUBLIC_COGNITO_SCOPE
+        - NEXT_PUBLIC_API_CORE_URL
+        - NEXT_PUBLIC_API_AUTH_URL
+        - NEXT_PUBLIC_API_CATALOG_URL
+        - NEXT_PUBLIC_API_BROKER_GATEWAY_URL
+        - NEXT_PUBLIC_TENANT_ID
+        - NEXT_PUBLIC_AUTH_USE_MOCK
+        - NEXT_PUBLIC_AUTH_DEBUG_KEEP_POPUP_OPEN
+        - NEXT_PUBLIC_ENABLE_DOCUMENT_ANALYSIS
+        - NEXT_PUBLIC_ENABLE_CLINICAL_MATCHING
     image: lis-frontend:cebac-current
     container_name: lis-frontend
     restart: unless-stopped
     env_file: /opt/lis/lis-front-monorepo/apps/lis/.env.prod
     environment:
-      # Service discovery URLs (internal)
-      NEXT_PUBLIC_API_CORE_URL: http://backend:8000
-      NEXT_PUBLIC_API_AUTH_URL: http://backend:8000
-      NEXT_PUBLIC_API_CATALOG_URL: http://backend:8000
-      NEXT_PUBLIC_API_BROKER_GATEWAY_URL: http://broker-gateway:3001
-      # Cognito (these come from .env.prod)
       NODE_ENV: production
       PORT: 3000
     ports:
