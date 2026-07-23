@@ -31,10 +31,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      # Bound to loopback only — reachable via an SSH tunnel into the
-      # server, never directly from the VPN/LAN. Do not widen this to
-      # "3306:3306" (that would publish it on every interface).
-      - "127.0.0.1:3306:3306"
+      - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
