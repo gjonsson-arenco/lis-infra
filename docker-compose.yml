@@ -19,5 +19,24 @@ services:
       retries: 5
       start_period: 5s
 
+  mysql:
+    image: mysql:8.0
+    container_name: lis-mysql
+    restart: unless-stopped
+    networks:
+      - lis-network
+    env_file: .env
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   redis-data:
+  mysql-data:

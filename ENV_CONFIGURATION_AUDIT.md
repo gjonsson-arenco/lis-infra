@@ -5,12 +5,12 @@
 ### Backend (lis-backend) - `.env.prod`
 
 **Database Configuration** ✅
-- `DB_CONNECTION=sqlsrv` (SQL Server, not MySQL)
-- `DB_HOST=192.168.5.10` (Labcore database server)
-- `DB_PORT=1433` (SQL Server default port)
-- `DB_DATABASE=Labcore`
-- `DB_USERNAME=sa`
-- `DB_PASSWORD=Sistema2011`
+- `DB_CONNECTION=mysql` (containerized MySQL 8.0, service name `mysql` on `lis-network`)
+- `DB_HOST=mysql`
+- `DB_PORT=3306`
+- `DB_DATABASE=lis_production`
+- `DB_USERNAME=` (dedicated app user, not `root` — see lis-infra pendientes)
+- `DB_PASSWORD=` (see `.env` on server, not committed)
 
 **Application Configuration** ✅
 - `APP_ENV=production`
@@ -54,10 +54,10 @@
 
 **Broker Configuration** ✅
 - `BROKERS_ENABLED=traditum,imed,swiss-medical`
-- `BROKER_SMG_API_KEY=c41f4e3d4ad9e74d6f69`
-- `BROKER_SMG_EMAIL=integracionesapi130388@swissmedical.com.ar`
-- `BROKER_SMG_PASSWORD=Swiss1234%`
-- `BROKER_SMG_CUIT=30672372697`
+- `BROKER_SMG_API_KEY=` (see `.env.prod` on server, not committed)
+- `BROKER_SMG_EMAIL=` (see `.env.prod` on server, not committed)
+- `BROKER_SMG_PASSWORD=` (see `.env.prod` on server, not committed)
+- `BROKER_SMG_CUIT=` (see `.env.prod` on server, not committed)
 - Retry logic enabled: `BROKER_SMG_RETRY_ATTEMPTS=2`
 - Circuit breaker enabled: `BROKER_SMG_CIRCUIT_BREAKER_ENABLED=true`
 
@@ -142,8 +142,8 @@
    - Validate user pool and client IDs match your AWS account
 
 4. **Database connection**:
-   - Verify SQL Server is accessible from Docker: `ping 192.168.5.10:1433`
-   - Test with `docker-compose` before full deploy
+   - MySQL runs as the `mysql` container on `lis-network` (see `docker-compose.yml`)
+   - Test with `docker compose` before full deploy
 
 5. **AWS Textract (optional)**:
    - Currently disabled. Enable only if you have AWS credentials
@@ -153,20 +153,23 @@
 
 ## 📦 docker-compose.prod.yml Configuration
 
-**Services Included:**
-✅ redis (cache, session storage)
+**Services Included (docker-compose.prod.yml):**
 ✅ backend (PHP-FPM 8.3)
 ✅ broker-gateway (NestJS)
 ✅ frontend (Next.js)
 ✅ clinical-matcher (FastAPI)
 
-**Network:** `lis-network` (bridge)
+redis and mysql live in the base `docker-compose.yml` (shared infra). Run both
+files together so `depends_on` resolves across them:
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`
+
+**Network:** `lis-network` (external, created once via `docker network create lis-network`)
 
 **Service Dependencies:**
 ```
-redis
+redis, mysql
   ↓
-backend (depends on redis)
+backend (depends on redis, mysql)
   ↓
 broker-gateway (depends on backend)
 frontend (depends on backend)
@@ -175,7 +178,8 @@ clinical-matcher (depends on backend)
 
 **Volumes:** All logs are persisted
 ```
-redis-data
+redis-data (base compose)
+mysql-data (base compose)
 backend-logs
 broker-logs
 frontend-logs
@@ -187,7 +191,7 @@ matcher-logs
 ## 🚀 DEPLOYMENT CHECKLIST
 
 - [ ] All 4 `.env.prod` files created in respective services
-- [ ] SQL Server connection tested (192.168.5.10:1433)
+- [ ] MySQL connection tested (mysql:3306, dedicated app user, not root)
 - [ ] Change all `change-me-in-production` secrets
 - [ ] Update Cognito redirect URIs to production domain
 - [ ] Review CORS_ALLOWED_ORIGINS for production
@@ -201,7 +205,7 @@ matcher-logs
 
 ## 📝 NOTES
 
-- **Database:** SQL Server (Labcore) at 192.168.5.10:1433
+- **Database:** MySQL 8.0, containerized (`lis-mysql` service on `lis-network`)
 - **Authentication:** AWS Cognito (sa-east-1)
 - **Brokers:** Traditum, IMED, Swiss Medical
 - **Image Registry:** (set in deployment script if using Docker Hub/ECR)

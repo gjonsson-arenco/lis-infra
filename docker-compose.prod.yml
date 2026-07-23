@@ -1,40 +1,23 @@
-version: '3.8'
-
 networks:
   lis-network:
-    driver: bridge
+    external: true
 
 services:
-  # Redis - Cache and session storage
-  redis:
-    image: redis:7-alpine
-    container_name: lis-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    networks:
-      - lis-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    volumes:
-      - redis-data:/data
-
   # LIS Backend (Laravel + PHP-FPM)
   backend:
     build:
       context: /opt/lis/lis-backend
       dockerfile: Dockerfile.prod
-    image: lis-backend:latest
+    image: lis-backend:cebac-current
     container_name: lis-backend
     restart: unless-stopped
     env_file: /opt/lis/lis-backend/.env.prod
     environment:
       # Override for Docker environment
-      DB_HOST: 192.168.5.10
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
       REDIS_HOST: redis
     ports:
       - "8000:8000"
@@ -42,6 +25,8 @@ services:
       - lis-network
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "php", "-r", "fopen('http://127.0.0.1:8000/health', 'r');"]
@@ -58,7 +43,7 @@ services:
     build:
       context: /opt/lis/lis-broker-gateway
       dockerfile: Dockerfile.prod
-    image: lis-broker-gateway:latest
+    image: lis-broker-gateway:cebac-current
     container_name: lis-broker-gateway
     restart: unless-stopped
     env_file: /opt/lis/lis-broker-gateway/.env.prod
@@ -89,7 +74,7 @@ services:
     build:
       context: /opt/lis/lis-front-monorepo
       dockerfile: Dockerfile.prod
-    image: lis-frontend:latest
+    image: lis-frontend:cebac-current
     container_name: lis-frontend
     restart: unless-stopped
     env_file: /opt/lis/lis-front-monorepo/apps/lis/.env.prod
@@ -123,7 +108,7 @@ services:
     build:
       context: /opt/lis/lis-clinical-matcher
       dockerfile: Dockerfile.prod
-    image: lis-clinical-matcher:latest
+    image: lis-clinical-matcher:cebac-current
     container_name: lis-clinical-matcher
     restart: unless-stopped
     env_file: /opt/lis/lis-clinical-matcher/.env.prod
@@ -147,8 +132,6 @@ services:
       - matcher-logs:/app/logs
 
 volumes:
-  redis-data:
-    driver: local
   backend-logs:
     driver: local
   broker-logs:
