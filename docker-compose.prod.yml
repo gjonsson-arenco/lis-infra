@@ -21,8 +21,6 @@ services:
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       REDIS_HOST: redis
-    ports:
-      - "8000:8000"
     networks:
       - lis-network
     depends_on:
@@ -53,8 +51,6 @@ services:
       # Service discovery
       BACKEND_URL: http://backend:8000
       REDIS_HOST: redis
-    ports:
-      - "3001:3001"
     networks:
       - lis-network
     depends_on:
@@ -102,8 +98,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-    ports:
-      - "3000:3000"
     networks:
       - lis-network
     depends_on:
@@ -130,8 +124,6 @@ services:
     environment:
       # Service discovery
       BACKEND_URL: http://backend:8000
-    ports:
-      - "8001:8001"
     networks:
       - lis-network
     depends_on:
@@ -145,6 +137,33 @@ services:
       start_period: 15s
     volumes:
       - matcher-logs:/app/logs
+
+  # Nginx — TLS termination in front of the 4 services above. Self-signed
+  # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
+  # first visit to each origin until the cert is accepted/trusted.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: lis-nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "3000:3000"
+      - "8000:8000"
+      - "3001:3001"
+      - "8001:8001"
+    networks:
+      - lis-network
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      broker-gateway:
+        condition: service_healthy
+      clinical-matcher:
+        condition: service_healthy
 
 volumes:
   backend-storage:
