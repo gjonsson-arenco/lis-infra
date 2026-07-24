@@ -118,6 +118,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Next.js standalone server binds to $HOSTNAME if set, and Docker
+      # sets it to the container ID by default — which resolves to the
+      # container's own network IP, not loopback. Without this, nothing
+      # inside the container (including its own healthcheck) can reach it
+      # via localhost, even though other containers reach it fine via
+      # its Docker DNS name.
+      HOSTNAME: "0.0.0.0"
     networks:
       - lis-network
     depends_on:
