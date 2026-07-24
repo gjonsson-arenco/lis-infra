@@ -39,6 +39,21 @@ services:
     volumes:
       - backend-storage:/var/www/storage
 
+  # Internal-only FastCGI-to-HTTP translator for backend. PHP-FPM doesn't
+  # speak HTTP, so broker-gateway/clinical-matcher can't call it directly —
+  # see nginx/backend-proxy.conf for why this is a separate container from
+  # the public-facing nginx (avoids a circular depends_on).
+  backend-proxy:
+    image: nginx:1.27-alpine
+    container_name: lis-backend-proxy
+    restart: unless-stopped
+    volumes:
+      - ./nginx/backend-proxy.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
 
   # Broker Gateway (NestJS)
   broker-gateway:
@@ -50,8 +65,9 @@ services:
     restart: unless-stopped
     env_file: /opt/lis/lis-broker-gateway/.env.prod
     environment:
-      # Service discovery
-      BACKEND_URL: http://backend:8000
+      # Service discovery — via backend-proxy, not backend directly (see
+      # backend-proxy's comment above for why)
+      BACKEND_URL: http://backend-proxy:8080
       REDIS_HOST: redis
     networks:
       - lis-network
@@ -60,6 +76,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+      backend-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/v1/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
       interval: 30s
@@ -124,13 +142,16 @@ services:
     restart: unless-stopped
     env_file: /opt/lis/lis-clinical-matcher/.env.prod
     environment:
-      # Service discovery
-      BACKEND_URL: http://backend:8000
+      # Service discovery — via backend-proxy, not backend directly (see
+      # backend-proxy's comment above for why)
+      BACKEND_URL: http://backend-proxy:8080
     networks:
       - lis-network
     depends_on:
       backend:
         condition: service_healthy
+      backend-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
