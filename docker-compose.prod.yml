@@ -142,9 +142,15 @@ services:
     restart: unless-stopped
     env_file: /opt/lis/lis-clinical-matcher/.env.prod
     environment:
-      # Service discovery — via backend-proxy, not backend directly (see
-      # backend-proxy's comment above for why)
-      BACKEND_URL: http://backend-proxy:8080
+      # The catalog HTTP client reads CATALOG_API_BASE_URL, not BACKEND_URL
+      # (BACKEND_URL isn't referenced anywhere in this app's code — dead
+      # var). Without it, this defaulted to http://127.0.0.1:8000, i.e.
+      # nothing, inside clinical-matcher's own container.
+      CATALOG_API_BASE_URL: http://backend-proxy:8080
+      # Must match backend's LIS_MATCHER_INTERNAL_TOKEN exactly (sent as
+      # X-Internal-Token). Both are still the placeholder value from the
+      # first deploy — rotate together before real production use.
+      CATALOG_API_INTERNAL_TOKEN: ${LIS_MATCHER_INTERNAL_TOKEN}
     networks:
       - lis-network
     depends_on:
