@@ -29,7 +29,9 @@ services:
       mysql:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "php", "-r", "fopen('http://127.0.0.1:8000/health', 'r');"]
+      # PHP-FPM speaks FastCGI, not HTTP — a plain HTTP client against this
+      # port always fails/hangs, so this only checks the port is listening.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8000"]
       interval: 30s
       timeout: 10s
       retries: 3
