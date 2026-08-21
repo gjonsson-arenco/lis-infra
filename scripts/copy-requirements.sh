@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 #
 # Copia al server los PDF de indicaciones (los "printables" de los requisitos de
-# estudio) y los mete adentro del contenedor del backend.
+# estudio).
 #
 # Por qué hace falta un script: esos PDF NO están en el repo (viven bajo
 # storage/, que está gitignoreado), así que ni el clone ni el build de la imagen
-# los traen. Y no alcanza con copiarlos a /opt/lis/lis-backend/storage en el
-# host: el compose monta ahí un volumen de Docker (backend-storage), o sea que
-# lo que se ve dentro del contenedor no es el directorio del repo. Por eso el
-# último salto es un `docker cp` al contenedor, no un cp en el host.
+# los traen — pero la app los necesita para servir la indicación al paciente.
 #
-# Destino final: /var/www/storage/app/private/requirements/ dentro del
-# contenedor = disk `local` de Laravel (storage/app/private) + la carpeta
-# `requirements` que usa CebacRequirementCatalogSeeder. Si DOCUMENTS_DISK deja
-# de ser `local`, este destino cambia.
+# Van a un directorio del HOST, /opt/lis/storage/requirements, que el compose
+# bind-montea read-only dentro del contenedor del backend en
+# /var/www/storage/app/private/requirements (= disk `local` de Laravel +
+# la carpeta que usa CebacRequirementCatalogSeeder). Consecuencias buenas:
+# sobreviven a cualquier rebuild, a un `down -v`, se listan con `ls` y entran en
+# el backup del server como cualquier otro archivo.
 #
 # ESTE SCRIPT SE CORRE DESDE TU MÁQUINA (es la que tiene los PDF), no en el
 # server. Necesita ssh y scp (o rsync si lo tenés).
@@ -22,14 +21,14 @@
 #   ./scripts/copy-requirements.sh usuario@ip-del-server
 #   ./scripts/copy-requirements.sh usuario@ip-del-server /ruta/a/los/pdf
 #
-# Después de copiar no hace falta re-seedear: los requisitos ya guardan la ruta
-# del archivo, solo faltaba el archivo. Si el catálogo todavía no se importó,
-# correr en el server ./scripts/seed-cebac.sh.
+# Después de copiar no hace falta re-seedear ni reiniciar nada: los requisitos
+# ya guardan la ruta del archivo y el bind mount es en vivo. Si el catálogo
+# todavía no se importó, correr en el server ./scripts/seed-cebac.sh.
 
 set -euo pipefail
 
-# Git Bash reescribe rutas tipo /var/www/... al pasarlas a ssh/docker y las
-# convierte en C:/Program Files/Git/var/www/... (ver guía de deploy §8).
+# Git Bash reescribe rutas tipo /opt/lis/... al pasarlas a ssh y las convierte
+# en C:/Program Files/Git/opt/lis/... (ver guía de deploy §8).
 export MSYS_NO_PATHCONV=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,9 +36,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER="${1:-${LIS_SERVER:-}}"
 SRC_DIR="${2:-$SCRIPT_DIR/../../lis-backend/storage/app/private/requirements}"
 
+# Tiene que coincidir con el bind mount del backend en docker-compose.prod.yml.
+HOST_DIR="/opt/lis/storage/requirements"
 CONTAINER="lis-backend"
-DEST="/var/www/storage/app/private/requirements"
-STAGING="/tmp/lis-requirements-upload"
 
 if [ -z "$SERVER" ]; then
   echo "Uso: $0 usuario@ip-del-server [/ruta/local/a/los/pdf]" >&2
@@ -60,35 +59,45 @@ fi
 
 echo "Origen:  $SRC_DIR ($local_count archivos)"
 echo "Server:  $SERVER"
-echo "Destino: $CONTAINER:$DEST"
+echo "Destino: $HOST_DIR (bind-monteado en $CONTAINER)"
 echo
 
-# 1) A un staging en el server. rsync si está (transfiere solo lo que cambió),
-#    scp si no — Git Bash en Windows no suele traer rsync.
-echo "==> Subiendo a $SERVER:$STAGING"
-ssh "$SERVER" "mkdir -p '$STAGING'"
+# El directorio se crea a mano una sola vez, y con el owner del usuario de
+# deploy. Si no existe cuando arranca el stack, Docker lo crea root:root y
+# después esta copia falla con un permission denied bastante opaco.
+echo "==> Verificando el destino"
+ssh "$SERVER" "
+  if [ ! -d '$HOST_DIR' ] || [ ! -w '$HOST_DIR' ]; then
+    echo 'ERROR: $HOST_DIR no existe o no es escribible por este usuario.' >&2
+    echo 'Crealo una sola vez con:' >&2
+    echo '  sudo mkdir -p $HOST_DIR && sudo chown \$(id -un):\$(id -gn) $HOST_DIR' >&2
+    exit 1
+  fi
+"
 
+echo "==> Copiando"
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --info=progress2 "$SRC_DIR/" "$SERVER:$STAGING/"
+  rsync -a --info=progress2 "$SRC_DIR/" "$SERVER:$HOST_DIR/"
 else
   echo "    (rsync no está, usando scp)"
-  scp -q -r "$SRC_DIR/." "$SERVER:$STAGING/"
+  scp -q -r "$SRC_DIR/." "$SERVER:$HOST_DIR/"
 fi
 
-# 2) Del staging al volumen del contenedor. Se usa `docker cp` con el nombre de
-#    contenedor (fijado con container_name en el compose) en vez de
-#    `docker compose cp`, para no depender del cwd ni de la versión de compose.
-#    El contenedor corre como www-data, así que el chown va con -u root.
-echo "==> Copiando adentro del contenedor"
+# El contenedor corre como www-data (uid 82): necesita permiso de lectura sobre
+# los archivos y de traverse sobre el directorio. `a+rX` da exactamente eso sin
+# marcar los PDF como ejecutables.
+echo "==> Ajustando permisos y verificando"
 ssh "$SERVER" "
   set -e
-  docker exec -u root '$CONTAINER' mkdir -p '$DEST'
-  docker cp '$STAGING/.' '$CONTAINER:$DEST'
-  docker exec -u root '$CONTAINER' chown -R www-data:www-data '$DEST'
-  rm -rf '$STAGING'
-  echo -n '    archivos en el contenedor: '
-  docker exec '$CONTAINER' sh -c 'ls -1 \"$DEST\" | wc -l'
+  chmod -R a+rX '$HOST_DIR'
+  echo -n '    archivos en el host: '
+  ls -1 '$HOST_DIR' | wc -l
+  if docker ps --format '{{.Names}}' | grep -qx '$CONTAINER'; then
+    echo -n '    visibles en el contenedor: '
+    docker exec -u www-data '$CONTAINER' sh -c 'ls -1 /var/www/storage/app/private/requirements | wc -l'
+  else
+    echo '    ($CONTAINER no está corriendo — se van a ver cuando levante)'
+  fi
 "
 
 echo "==> Listo (locales: $local_count)"
-echo "    Si los números no coinciden, revisá nombres con caracteres raros."

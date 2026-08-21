@@ -51,6 +51,26 @@ services:
       start_period: 20s
     volumes:
       - backend-storage:/var/www/storage
+      # Los PDF de indicaciones (printables de los requisitos) NO están en el
+      # repo: viven bajo storage/, que está gitignoreado. Como bind mount viven
+      # en el host, fuera del ciclo de vida de la imagen Y del volumen: se ven
+      # con `ls`, se copian con scp/rsync sin pasar por `docker cp`, entran en
+      # cualquier backup del server y sobreviven incluso a un
+      # `docker compose down -v`.
+      #
+      # Va montado ADENTRO de backend-storage: Docker aplica los mounts por
+      # profundidad de path, así que este pisa esa subcarpeta y el resto de
+      # storage/ (logs, cache, documents/ que sí escribe la app) sigue en el
+      # volumen.
+      #
+      # `ro` porque hoy la app solo los lee (RequirementDocumentService sirve
+      # el archivo; no hay endpoint que suba printables). Si algún día se sube
+      # uno desde el ABM, sacar el `:ro`.
+      #
+      # El host dir tiene que existir antes del primer `up` — lo crea
+      # scripts/copy-requirements.sh; si no existe, Docker lo crea root:root y
+      # después el deploy no puede escribir ahí.
+      - /opt/lis/storage/requirements:/var/www/storage/app/private/requirements:ro
 
   # Internal-only FastCGI-to-HTTP translator for backend. PHP-FPM doesn't
   # speak HTTP, so broker-gateway/clinical-matcher can't call it directly —
