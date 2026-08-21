@@ -21,6 +21,19 @@ services:
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       REDIS_HOST: redis
+      # Rules engine de facturación. OJO: no es opcional — AdmissionValuationService
+      # llama al engine en TODA valorización (quote), sin feature flag y sin
+      # fallback, así que si rules-engine no responde el quote devuelve 500.
+      # LIS_RULES_ENGINE_ENABLED solo gobierna la notificación de reload que el
+      # backend manda cuando se edita una regla en el ABM.
+      LIS_RULES_ENGINE_ENABLED: "true"
+      LIS_RULES_ENGINE_BASE_URL: http://rules-engine:3010
+      # Mismo valor a los dos lados: el backend lo manda como X-Internal-Token al
+      # engine, y el engine lo manda de vuelta al backend para leer el catálogo
+      # de reglas (middleware internal.service:lis_rules_engine). Centralizado en
+      # el .env de lis-infra, no duplicado en cada .env.prod (guía §6.4).
+      LIS_RULES_ENGINE_INTERNAL_TOKEN: ${LIS_RULES_ENGINE_INTERNAL_TOKEN}
+      LIS_RULES_ENGINE_TENANT_ID: ${LIS_RULES_ENGINE_TENANT_ID:-lis-default}
     networks:
       - lis-network
     depends_on:
@@ -174,7 +187,56 @@ services:
     volumes:
       - matcher-logs:/app/logs
 
-  # Nginx — TLS termination in front of the 4 services above. Self-signed
+  # Rules Engine (Fastify/TypeScript) — motor de reglas de facturación.
+  #
+  # No lleva env_file: toda su configuración entra por `environment` desde el
+  # .env de lis-infra, así que no hay que crear ningún .env.prod a mano en
+  # /opt/lis/lis-rules-engine.
+  #
+  # Tampoco lleva base de datos: el catálogo de reglas vive en MySQL, es del
+  # backend, y el engine lo consume por HTTP. El Postgres/Prisma del repo solo
+  # lo usa /api/v1/rules/evaluate, que este stack no consume (ver README del
+  # repo y §1 de la guía de deploy).
+  rules-engine:
+    build:
+      context: /opt/lis/lis-rules-engine
+      dockerfile: Dockerfile.prod
+    image: lis-rules-engine:cebac-current
+    container_name: lis-rules-engine
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3010
+      LOG_LEVEL: info
+      # Vía backend-proxy, no backend directo: PHP-FPM habla FastCGI, no HTTP
+      # (mismo motivo que clinical-matcher/broker-gateway).
+      BACKEND_BASE_URL: http://backend-proxy:8080
+      BACKEND_INTERNAL_TOKEN: ${LIS_RULES_ENGINE_INTERNAL_TOKEN}
+      # Tiene que ser el MISMO tenant que manda el backend en cada request: la
+      # cache del catálogo está keyeada por tenantId, y si el warmup calienta
+      # otro tenant, /billing/evaluate responde 500 con la cache "vacía".
+      TENANT_ID: ${LIS_RULES_ENGINE_TENANT_ID:-lis-default}
+      BACKEND_TIMEOUT_MS: 5000
+      RULE_CACHE_TTL_SECONDS: 300
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
+      backend-proxy:
+        condition: service_started
+    healthcheck:
+      # No es el mismo one-liner que broker-gateway/frontend: ese no consume la
+      # respuesta y el proceso queda vivo hasta el keep-alive del server (72s en
+      # Fastify) — siempre timeout, contenedor `unhealthy` con la app sana. Y
+      # como nginx depende de rules-engine healthy, nginx no arrancaría nunca.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3010/health',(r)=>{r.resume();r.on('end',()=>process.exit(r.statusCode===200?0:1))}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Nginx — TLS termination in front of the 5 services above. Self-signed
   # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
   # first visit to each origin until the cert is accepted/trusted.
   nginx:
@@ -189,6 +251,7 @@ services:
       - "8000:8000"
       - "3001:3001"
       - "8001:8001"
+      - "3010:3010"
     networks:
       - lis-network
     depends_on:
@@ -199,6 +262,8 @@ services:
       broker-gateway:
         condition: service_healthy
       clinical-matcher:
+        condition: service_healthy
+      rules-engine:
         condition: service_healthy
 
 volumes:

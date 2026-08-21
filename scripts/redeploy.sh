@@ -28,6 +28,7 @@ declare -A REPO_SERVICE=(
   [lis-broker-gateway]=broker-gateway
   [lis-front-monorepo]=frontend
   [lis-clinical-matcher]=clinical-matcher
+  [lis-rules-engine]=rules-engine
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no
@@ -39,6 +40,18 @@ pull_repo() {
   local dir="$1"
   local name
   name=$(basename "$dir")
+
+  # Un repo que todavía no se clonó (típico al sumar un servicio nuevo al
+  # stack) hace fallar a `git -C` con un error críptico y, bajo `set -e`,
+  # aborta el redeploy entero sin decir qué falta. Cortamos acá con el path
+  # exacto: además el compose lo necesita como build context, así que sin el
+  # clone no hay nada que hacer.
+  if [ ! -d "$dir/.git" ]; then
+    echo "ERROR: falta clonar el repo en $dir (build context del compose)." >&2
+    echo "       Cloná ahí el repo del servicio y volvé a correr este script." >&2
+    exit 1
+  fi
+
   echo "==> $name: git pull"
 
   local before after
@@ -69,9 +82,9 @@ done
 cd "$INFRA_DIR"
 
 if [ ${#changed_services[@]} -eq 0 ]; then
-  echo "No hay servicios con código nuevo — nada para reconstruir."
+  echo "No hay servicios con código nuevo — no se reconstruye ninguna imagen."
 else
-  echo "==> Reconstruyendo: ${changed_services[*]}"
+  echo "==> Reconstruyendo imágenes: ${changed_services[*]}"
 
   # Las NEXT_PUBLIC_* de Next.js se inlinean en build-time, no en runtime.
   # docker compose las toma del shell que corre `--build` (ver
@@ -91,15 +104,31 @@ else
   fi
 
   # shellcheck disable=SC2086
-  $COMPOSE up -d --build "${changed_services[@]}"
+  $COMPOSE build "${changed_services[@]}"
+fi
+
+if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
+  # `up -d` sobre TODO el stack, no solo sobre los servicios que cambiaron:
+  # Compose recrea únicamente lo que difiere (imagen nueva, env/puertos/
+  # depends_on nuevos en el compose) y deja el resto corriendo. Limitarlo a los
+  # servicios con código nuevo dejaba afuera dos casos reales:
+  #
+  #  - Servicio NUEVO en el compose cuyo repo ya estaba clonado y sin commits
+  #    nuevos: nunca se creaba el contenedor, y nginx quedaba con un upstream
+  #    que no resuelve -> 502 en todo lo que dependa de él.
+  #  - Cambio de compose sin cambio de código (variables de entorno nuevas,
+  #    puertos): `restart` no las aplica, hay que recrear el contenedor.
+  #
+  # Las imágenes ya se buildearon arriba; acá `up -d` solo buildea si falta
+  # alguna imagen (primer deploy de un servicio nuevo).
+  echo "==> Aplicando el compose al stack completo"
+  $COMPOSE up -d
 
   if [[ " ${changed_services[*]} " == *" backend "* ]]; then
     echo "==> Backend cambió — corriendo migrations"
     $COMPOSE exec backend php artisan migrate --force
   fi
-fi
 
-if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   # `restart` (no `up -d`): un contenedor bind-mounteado no se recrea solo
   # porque cambió el contenido del archivo montado, así que `up -d` no
   # alcanza para releer nginx.conf/backend-proxy.conf. `restart` reinicia
@@ -107,6 +136,26 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   # los upstreams — soluciona los dos problemas de una.
   echo "==> Reiniciando nginx/backend-proxy (upstreams recreados y/o config nueva)"
   $COMPOSE restart nginx backend-proxy
+
+  # El catálogo de reglas de facturación vive en el backend (MySQL); el
+  # rules-engine lo cachea en memoria y solo lo carga en el warmup de arranque o
+  # cuando alguien le pega a /billing/reload. Dos motivos para forzarlo acá:
+  #
+  #  1. Si el engine arrancó antes de que el backend pudiera servir el catálogo
+  #     (migrations a medio correr, por ejemplo), el warmup reintenta 12 veces
+  #     cada 5s y después se rinde: la cache queda vacía y TODA valorización
+  #     devuelve 500, porque el backend llama al engine sin fallback.
+  #  2. Si el deploy trajo reglas nuevas por migration/seed, la cache vieja
+  #     sigue sirviendo hasta que alguien la refresque a mano.
+  #
+  # No aborta el deploy si falla: el resto del stack ya está arriba y esto se
+  # puede reintentar solo.
+  echo "==> Recalentando catálogo de reglas de facturación"
+  if ! $COMPOSE exec -T rules-engine node -e "fetch('http://localhost:3010/api/v1/billing/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantId:process.env.TENANT_ID||'lis-default'})}).then(async (r)=>{console.log('    HTTP',r.status,await r.text());process.exit(r.ok?0:1)}).catch((e)=>{console.error('   ',e.message);process.exit(1)})"; then
+    echo "    WARNING: no se pudo recalentar el catálogo de reglas. Las valorizaciones" >&2
+    echo "    van a fallar hasta que el engine tenga el catálogo cargado. Reintentar con:" >&2
+    echo "    $COMPOSE exec rules-engine node -e \"fetch('http://localhost:3010/api/v1/billing/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantId:'lis-default'})}).then((r)=>console.log(r.status))\"" >&2
+  fi
 fi
 
 echo "==> Estado final"
