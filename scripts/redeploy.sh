@@ -137,8 +137,8 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   echo "==> Reiniciando nginx/backend-proxy (upstreams recreados y/o config nueva)"
   $COMPOSE restart nginx backend-proxy
 
-  # El catálogo de reglas de facturación vive en el backend (MySQL); el
-  # rules-engine lo cachea en memoria y solo lo carga en el warmup de arranque o
+  # El catálogo de reglas de facturación vive en el backend (MySQL) y el
+  # rules-engine lo cachea en memoria: solo lo carga en el warmup de arranque o
   # cuando alguien le pega a /billing/reload. Dos motivos para forzarlo acá:
   #
   #  1. Si el engine arrancó antes de que el backend pudiera servir el catálogo
@@ -146,16 +146,10 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   #     cada 5s y después se rinde: la cache queda vacía y TODA valorización
   #     devuelve 500, porque el backend llama al engine sin fallback.
   #  2. Si el deploy trajo reglas nuevas por migration/seed, la cache vieja
-  #     sigue sirviendo hasta que alguien la refresque a mano.
+  #     sigue sirviendo hasta que alguien la refresque.
   #
-  # No aborta el deploy si falla: el resto del stack ya está arriba y esto se
-  # puede reintentar solo.
-  echo "==> Recalentando catálogo de reglas de facturación"
-  if ! $COMPOSE exec -T rules-engine node -e "fetch('http://localhost:3010/api/v1/billing/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantId:process.env.TENANT_ID||'lis-default'})}).then(async (r)=>{console.log('    HTTP',r.status,await r.text());process.exit(r.ok?0:1)}).catch((e)=>{console.error('   ',e.message);process.exit(1)})"; then
-    echo "    WARNING: no se pudo recalentar el catálogo de reglas. Las valorizaciones" >&2
-    echo "    van a fallar hasta que el engine tenga el catálogo cargado. Reintentar con:" >&2
-    echo "    $COMPOSE exec rules-engine node -e \"fetch('http://localhost:3010/api/v1/billing/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenantId:'lis-default'})}).then((r)=>console.log(r.status))\"" >&2
-  fi
+  # No aborta el deploy si falla: el resto del stack ya está arriba.
+  "$INFRA_DIR/scripts/reload-rules-cache.sh" || true
 fi
 
 echo "==> Estado final"
