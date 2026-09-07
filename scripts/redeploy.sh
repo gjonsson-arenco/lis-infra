@@ -29,6 +29,7 @@ declare -A REPO_SERVICE=(
   [lis-front-monorepo]=frontend
   [lis-clinical-matcher]=clinical-matcher
   [lis-rules-engine]=rules-engine
+  [lis-chat-service]=chat-service
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no
@@ -127,6 +128,19 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   if [[ " ${changed_services[*]} " == *" backend "* ]]; then
     echo "==> Backend cambió — corriendo migrations"
     $COMPOSE exec backend php artisan migrate --force
+  fi
+
+  # La base del chat (`lis_chat`) es propia y no la crea nadie solo: el init de
+  # MySQL solo corre con el datadir vacío. Va DESPUÉS del `up -d` porque recién
+  # ahí Compose garantizó que mysql está healthy — antes, el `exec` del script
+  # fallaría en un server recién levantado. Si el contenedor del chat arrancó un
+  # instante antes de que la base existiera quedó reiniciándose, así que el
+  # restart lo pone al día sin esperar el backoff.
+  if "$INFRA_DIR/scripts/create-chat-db.sh"; then
+    $COMPOSE restart chat-service
+  else
+    echo "ADVERTENCIA: no se pudo asegurar la base del chat — chat-service va a" >&2
+    echo "             quedar reiniciándose. El resto del stack sigue arriba." >&2
   fi
 
   # `restart` (no `up -d`): un contenedor bind-mounteado no se recrea solo

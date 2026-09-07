@@ -139,6 +139,7 @@ services:
         - NEXT_PUBLIC_API_AUTH_URL
         - NEXT_PUBLIC_API_CATALOG_URL
         - NEXT_PUBLIC_API_BROKER_GATEWAY_URL
+        - NEXT_PUBLIC_API_CHAT_URL
         - NEXT_PUBLIC_TENANT_ID
         - NEXT_PUBLIC_AUTH_USE_MOCK
         - NEXT_PUBLIC_AUTH_DEBUG_KEEP_POPUP_OPEN
@@ -256,7 +257,79 @@ services:
       retries: 3
       start_period: 15s
 
-  # Nginx — TLS termination in front of the 5 services above. Self-signed
+  # Chat interno (NestJS + Socket.io) — mensajería entre usuarios del LIS.
+  #
+  # No lleva env_file (igual que rules-engine): toda su configuración entra por
+  # `environment` desde el .env de lis-infra, así que no hay ningún .env.prod
+  # que crear a mano en /opt/lis/lis-chat-service.
+  #
+  # Tiene BASE DE DATOS PROPIA (`lis_chat`), separada de la del LIS pero dentro
+  # de la misma instancia de MySQL. La base y su usuario NO los crea el
+  # contenedor de MySQL: los scripts de /docker-entrypoint-initdb.d solo corren
+  # con el datadir vacío, y el de este server ya tiene la base del LIS. Los crea
+  # scripts/create-chat-db.sh, que redeploy.sh llama en cada deploy. Las TABLAS
+  # sí se crean solas: con DB_RUN_MIGRATIONS=true TypeORM corre las migraciones
+  # pendientes al arrancar.
+  chat-service:
+    build:
+      context: /opt/lis/lis-chat-service
+      # El repo tiene un solo Dockerfile y ya es de producción (multi-stage,
+      # `npm ci --omit=dev`, USER node); no hay Dockerfile.prod como en los
+      # otros repos.
+      dockerfile: Dockerfile
+    image: lis-chat-service:cebac-current
+    container_name: lis-chat-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # 3002 y no el 3001 que trae por defecto el repo: ese puerto ya lo publica
+      # broker-gateway en el host. En este stack cada servicio usa el mismo
+      # número adentro y afuera, así que se cambia acá y no solo en nginx.
+      PORT: 3002
+      GLOBAL_PREFIX: api/v1
+      LOG_LEVEL: info
+      # Origen del navegador, para el handshake de Socket.io y el CORS del
+      # espejo REST. Vacío = cualquier origen; el valor real va en el .env de
+      # lis-infra (la URL del frontend, puerto 3000).
+      CORS_ORIGINS: ${LIS_CHAT_CORS_ORIGINS:-}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_CHAT_DATABASE:-lis_chat}
+      MYSQL_USER: ${MYSQL_CHAT_USER:-lis_chat_user}
+      MYSQL_PASSWORD: ${MYSQL_CHAT_PASSWORD}
+      DB_SYNCHRONIZE: "false"
+      DB_RUN_MIGRATIONS: "true"
+      REDIS_URL: redis://redis:6379
+      REDIS_KEY_PREFIX: lis:chat
+      # Vía backend-proxy, no backend directo (PHP-FPM habla FastCGI, mismo
+      # motivo que clinical-matcher/broker-gateway/rules-engine). El chat no
+      # sabe de Cognito: valida cada token contra GET /api/v1/chat/identity del
+      # backend, que es su única autoridad sobre la identidad. Si el backend no
+      # responde, nadie se puede conectar al chat.
+      BACKEND_URL: http://backend-proxy:8080
+      BACKEND_TIMEOUT_MS: 5000
+      IDENTITY_CACHE_TTL: 300
+    networks:
+      - lis-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      backend-proxy:
+        condition: service_started
+    healthcheck:
+      # /health queda fuera de GLOBAL_PREFIX a propósito (main.ts lo excluye).
+      # wget y no curl: node:20-alpine trae el busybox, no curl.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Nginx — TLS termination in front of the 6 services above. Self-signed
   # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
   # first visit to each origin until the cert is accepted/trusted.
   nginx:
@@ -272,9 +345,15 @@ services:
       - "3001:3001"
       - "8001:8001"
       - "3010:3010"
+      - "3002:3002"
     networks:
       - lis-network
     depends_on:
+      # chat-service NO está acá a propósito, a diferencia de los otros cinco:
+      # nginx no arranca hasta que todos sus depends_on estén healthy, así que
+      # un chat roto (base sin crear, migración fallida) dejaría caído el sitio
+      # entero. Su server block resuelve el upstream por DNS en cada request
+      # (ver nginx.conf), así que sin chat solo se cae el 3002.
       frontend:
         condition: service_healthy
       backend:
