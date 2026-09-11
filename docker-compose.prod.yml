@@ -42,6 +42,8 @@ services:
       DOMAIN_EVENTS_ENABLED: "true"
       DOMAIN_EVENTS_ORDER_STREAM: lis:events:order
       LIS_ORCHESTRATOR_INTERNAL_TOKEN: ${LIS_ORCHESTRATOR_INTERNAL_TOKEN}
+      # Para el tablero de conexiones: el backend le pregunta su estado.
+      LIS_ORCHESTRATOR_BASE_URL: http://orchestrator:3020
     networks:
       - lis-network
     depends_on:
