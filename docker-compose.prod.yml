@@ -405,9 +405,10 @@ services:
   # para probar el circuito; en producción va `http` con LABCORE_API_URL (base
   # sin /api/v1) y una LABCORE_API_KEY con permiso de escritura.
   #
-  # Labcore rechaza la orden entera si llega un código de catálogo que no
-  # existe: los LABCORE_SEND_* apagan cada código opcional cuando ese catálogo
-  # no está alineado con el del LIS (ver .env.example del repo).
+  # La equivalencia de códigos de catálogo (estudios, muestras, médicos…) y la
+  # política para lo no mapeado se administran desde el LIS (Admin >
+  # Integraciones) y viajan en cada evento; acá sólo van los fallbacks de los
+  # valores fijos que Labcore pide y el LIS no tiene.
   adapter-labcore:
     build:
       context: /opt/lis/lis-adapters/lis-adapter-labcore
@@ -425,7 +426,6 @@ services:
       LABCORE_API_URL: ${LABCORE_API_URL:-}
       LABCORE_API_KEY: ${LABCORE_API_KEY:-}
       LABCORE_API_TIMEOUT_MS: 10000
-      LABCORE_DOCTOR_CODE_SOURCE: ${LABCORE_DOCTOR_CODE_SOURCE:-none}
       LABCORE_PRIORITY_CODE_ROUTINE: ${LABCORE_PRIORITY_CODE_ROUTINE:-}
       LABCORE_PRIORITY_CODE_URGENT: ${LABCORE_PRIORITY_CODE_URGENT:-}
       LABCORE_PATIENT_TYPE_CODE: ${LABCORE_PATIENT_TYPE_CODE:-}
