@@ -30,6 +30,8 @@ declare -A REPO_SERVICE=(
   [lis-clinical-matcher]=clinical-matcher
   [lis-rules-engine]=rules-engine
   [lis-chat-service]=chat-service
+  [lis-orchestrator]=orchestrator
+  [lis-adapters/lis-adapter-labcore]=adapter-labcore
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no

@@ -36,6 +36,10 @@ REPOS=(
   "lis-clinical-matcher|lis_clinical_matcher|main"
   "lis-rules-engine|lis-rules-engine|main"
   "lis-chat-service|lis-chat-service|main"
+  "lis-orchestrator|lis-orchestrator|main"
+  # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
+  # por adapter (git clone crea la carpeta intermedia).
+  "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
 )
 
 mkdir -p "$LIS_ROOT"
@@ -82,11 +86,12 @@ Antes de levantar el stack, para cada repo recién clonado:
      - lis-broker-gateway/.env.prod
      - lis-front-monorepo/apps/lis/.env.prod
      - lis-clinical-matcher/.env.prod
-     - lis-rules-engine y lis-chat-service: NO necesitan .env.prod (toda su
-       config sale del docker-compose.prod.yml).
+     - lis-rules-engine, lis-chat-service, lis-orchestrator y los adapters:
+       NO necesitan .env.prod (toda su config sale del docker-compose.prod.yml).
   2. Revisar que el .env de lis-infra tenga las variables compartidas
      (ver .env.example: MYSQL_*, MYSQL_CHAT_*, LIS_CHAT_CORS_ORIGINS,
-     LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN).
+     LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN,
+     LIS_ORCHESTRATOR_INTERNAL_TOKEN, LIS_ADAPTER_LABCORE_INTERNAL_TOKEN).
      La base del chat no hay que crearla a mano: la crea
      scripts/create-chat-db.sh, que redeploy.sh llama en cada deploy.
   3. Levantar/actualizar con: ./scripts/redeploy.sh

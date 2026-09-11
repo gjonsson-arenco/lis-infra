@@ -34,6 +34,14 @@ services:
       # el .env de lis-infra, no duplicado en cada .env.prod (guía §6.4).
       LIS_RULES_ENGINE_INTERNAL_TOKEN: ${LIS_RULES_ENGINE_INTERNAL_TOKEN}
       LIS_RULES_ENGINE_TENANT_ID: ${LIS_RULES_ENGINE_TENANT_ID:-lis-default}
+      # Eventos de dominio hacia lis-orchestrator: cada orden creada se publica
+      # en un stream de Redis. predis y no phpredis: la extensión no está en la
+      # imagen, y el paquete va en composer. El backend nunca falla por esto:
+      # si Redis no está, loguea y sigue; la orden se reenvía desde el LIS.
+      REDIS_CLIENT: predis
+      DOMAIN_EVENTS_ENABLED: "true"
+      DOMAIN_EVENTS_ORDER_STREAM: lis:events:order
+      LIS_ORCHESTRATOR_INTERNAL_TOKEN: ${LIS_ORCHESTRATOR_INTERNAL_TOKEN}
     networks:
       - lis-network
     depends_on:
@@ -324,6 +332,98 @@ services:
       # /health queda fuera de GLOBAL_PREFIX a propósito (main.ts lo excluye).
       # wget y no curl: node:20-alpine trae el busybox, no curl.
       test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Orquestador de eventos (NestJS) — lee `lis:events:order` del Redis del
+  # stack y despacha cada orden creada al adapter del proveedor que diga la
+  # regla; le informa al backend cada paso por los webhooks internos de
+  # integraciones. Sin base propia: su único estado es el consumer group del
+  # stream, en Redis. No lleva env_file: toda su configuración entra por
+  # `environment` desde el .env de lis-infra.
+  #
+  # No lo expone nginx: no lo llama nadie desde afuera. Su API (/api/v1/rules)
+  # es de diagnóstico y se consulta desde adentro del stack.
+  orchestrator:
+    build:
+      context: /opt/lis/lis-orchestrator
+      dockerfile: Dockerfile
+    image: lis-orchestrator:cebac-current
+    container_name: lis-orchestrator
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3020
+      GLOBAL_PREFIX: api/v1
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      DOMAIN_EVENTS_ORDER_STREAM: lis:events:order
+      CONSUMER_GROUP: lis-orchestrator
+      # Vía backend-proxy, no backend directo (PHP-FPM habla FastCGI, mismo
+      # motivo que el resto de los servicios Node).
+      BACKEND_URL: http://backend-proxy:8080
+      BACKEND_INTERNAL_TOKEN: ${LIS_ORCHESTRATOR_INTERNAL_TOKEN}
+      BACKEND_TIMEOUT_MS: 5000
+      DISPATCH_MAX_ATTEMPTS: 3
+      DISPATCH_BACKOFF_BASE_MS: 2000
+      DISPATCH_BACKOFF_MAX_MS: 30000
+      # La regla "toda orden creada va a Labcore". Los filtros por origen y
+      # servicio (LABCORE_ORIGIN_CODES / LABCORE_SERVICE_CODES) van en el .env
+      # de lis-infra si hace falta acotarla.
+      LABCORE_ENABLED: ${LABCORE_ENABLED:-true}
+      LABCORE_ADAPTER_URL: http://adapter-labcore:3021
+      LABCORE_ADAPTER_INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
+      LABCORE_ADAPTER_TIMEOUT_MS: 10000
+      LABCORE_ORIGIN_CODES: ${LABCORE_ORIGIN_CODES:-}
+      LABCORE_SERVICE_CODES: ${LABCORE_SERVICE_CODES:-}
+    networks:
+      - lis-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      backend-proxy:
+        condition: service_started
+      adapter-labcore:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3020/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Adapter de Labcore (NestJS) — traduce la orden canónica al formato de
+  # Labcore y la envía a su API. Stateless: lo llama sólo el orchestrator y no
+  # habla con nadie más del stack. Tampoco lleva env_file.
+  #
+  # LABCORE_MODE=stub hasta que esté definida la API real de Labcore: acepta
+  # todo y responde ids inventados (LC-STUB-…). Cuando haya contrato y
+  # credenciales se pasa a `http` con LABCORE_API_URL / LABCORE_API_KEY.
+  adapter-labcore:
+    build:
+      context: /opt/lis/lis-adapters/lis-adapter-labcore
+      dockerfile: Dockerfile
+    image: lis-adapter-labcore:cebac-current
+    container_name: lis-adapter-labcore
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3021
+      GLOBAL_PREFIX: api/v1
+      LOG_LEVEL: info
+      INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
+      LABCORE_MODE: ${LABCORE_MODE:-stub}
+      LABCORE_API_URL: ${LABCORE_API_URL:-}
+      LABCORE_API_KEY: ${LABCORE_API_KEY:-}
+      LABCORE_API_TIMEOUT_MS: 10000
+    networks:
+      - lis-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3021/health"]
       interval: 30s
       timeout: 10s
       retries: 3
