@@ -20,7 +20,10 @@
 #     ./scripts/push-geo-env.sh usuario@ip-del-server
 #
 # Otras variables que se pueden pisar: GEO_AWS_REGION, GEO_BIAS_LAT,
-# GEO_BIAS_LNG (coordenadas del laboratorio, sesgan las sugerencias).
+# GEO_BIAS_LNG (coordenadas del laboratorio, sesgan las sugerencias),
+# GEO_REGION (país ISO, AR), GEO_LANGUAGE (es), GEO_BIAS_RADIUS_M (60000),
+# GEO_MAP_STYLE (Standard). Estas cuatro se suben siempre, con esos defaults
+# si no están en el .env local: en el bundle no puede quedar ninguna vacía.
 #
 # Después hay que reconstruir el front: las NEXT_PUBLIC_* se inlinean en
 # build-time. ./scripts/redeploy.sh lo hace solo si el repo del front cambió;
@@ -62,6 +65,18 @@ REGION="${GEO_AWS_REGION:-$(read_local "$LOCAL_BACKEND_ENV" AWS_LOCATION_REGION)
 REGION="${REGION:-sa-east-1}"
 BIAS_LAT="${GEO_BIAS_LAT:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_GEO_BIAS_LAT)}"
 BIAS_LNG="${GEO_BIAS_LNG:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_GEO_BIAS_LNG)}"
+# Estas van SIEMPRE, con default si el .env local no las tiene: el Dockerfile
+# del front hace `ENV X=$X` por cada build arg, así que la que falta en el
+# .env.prod llega al bundle como string vacío y AWS rechaza el request
+# (`IncludeCountries: [""]`, `Language: ""` → 400 FieldValidationFailed).
+GEO_REGION="${GEO_REGION:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_GEO_REGION)}"
+GEO_REGION="${GEO_REGION:-AR}"
+GEO_LANGUAGE="${GEO_LANGUAGE:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_GEO_LANGUAGE)}"
+GEO_LANGUAGE="${GEO_LANGUAGE:-es}"
+BIAS_RADIUS_M="${GEO_BIAS_RADIUS_M:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_GEO_BIAS_RADIUS_M)}"
+BIAS_RADIUS_M="${BIAS_RADIUS_M:-60000}"
+MAP_STYLE="${GEO_MAP_STYLE:-$(read_local "$LOCAL_FRONT_ENV" NEXT_PUBLIC_AWS_LOCATION_MAP_STYLE)}"
+MAP_STYLE="${MAP_STYLE:-Standard}"
 
 if [ -z "$SERVER_KEY" ] || [ -z "$BROWSER_KEY" ]; then
   echo "ERROR: falta la key de Amazon Location." >&2
@@ -85,6 +100,8 @@ echo "Backend:  $REMOTE_BACKEND_ENV"
 echo "          GEO_PROVIDER=aws  AWS_LOCATION_KEY=$(redact "$SERVER_KEY")"
 echo "Front:    $REMOTE_FRONT_ENV"
 echo "          NEXT_PUBLIC_GEO_PROVIDER=aws  NEXT_PUBLIC_AWS_LOCATION_KEY=$(redact "$BROWSER_KEY")"
+echo "          NEXT_PUBLIC_GEO_REGION=$GEO_REGION  NEXT_PUBLIC_GEO_LANGUAGE=$GEO_LANGUAGE"
+echo "          NEXT_PUBLIC_GEO_BIAS_RADIUS_M=$BIAS_RADIUS_M  NEXT_PUBLIC_AWS_LOCATION_MAP_STYLE=$MAP_STYLE"
 if [ -n "$BIAS_LAT" ] && [ -n "$BIAS_LNG" ]; then
   echo "          NEXT_PUBLIC_GEO_BIAS_LAT=$BIAS_LAT  NEXT_PUBLIC_GEO_BIAS_LNG=$BIAS_LNG"
 else
@@ -112,7 +129,7 @@ assignments=$(
     "$REMOTE_BACKEND_ENV" AWS_LOCATION_REGION "$REGION" \
     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_GEO_PROVIDER aws \
     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_AWS_LOCATION_KEY "$BROWSER_KEY" \
-    "$REMOTE_FRONT_ENV" NEXT_PUBLIC_AWS_LOCATION_REGION "$REGION"
+    "$REMOTE_FRONT_ENV" NEXT_PUBLIC_AWS_LOCATION_REGION "$REGION"     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_GEO_REGION "$GEO_REGION"     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_GEO_LANGUAGE "$GEO_LANGUAGE"     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_GEO_BIAS_RADIUS_M "$BIAS_RADIUS_M"     "$REMOTE_FRONT_ENV" NEXT_PUBLIC_AWS_LOCATION_MAP_STYLE "$MAP_STYLE"
   if [ -n "$BIAS_LAT" ] && [ -n "$BIAS_LNG" ]; then
     printf '%s\t%s\t%s\n' \
       "$REMOTE_FRONT_ENV" NEXT_PUBLIC_GEO_BIAS_LAT "$BIAS_LAT" \
