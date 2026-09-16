@@ -14,10 +14,23 @@
 # reinicia, sigue apuntando a la IP vieja y devuelve 502 aunque el servicio
 # nuevo esté sano. No alcanza con "cambió la config de nginx".
 #
-# Uso: ./scripts/redeploy.sh
+# Uso: ./scripts/redeploy.sh [--force]
 # Correrlo parado en cualquier lado — resuelve todos los paths solos.
+#
+# --force: aplicar el compose, correr migrations y taggear aunque ningún repo
+# haya traído commits nuevos. Es para rehacer un deploy que falló a mitad
+# (ya se pulleó todo, así que sin esto la segunda corrida no hace nada) o
+# para aplicar un cambio de .env sin código nuevo.
 
 set -euo pipefail
+
+FORCE=false
+if [ "${1:-}" = "--force" ]; then
+  FORCE=true
+elif [ -n "${1:-}" ]; then
+  echo "Uso: $0 [--force]" >&2
+  exit 2
+fi
 
 LIS_ROOT="/opt/lis"
 INFRA_DIR="$LIS_ROOT/lis-infra"
@@ -112,7 +125,7 @@ else
   $COMPOSE build "${changed_services[@]}"
 fi
 
-if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
+if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ] || [ "$FORCE" = true ]; then
   # `up -d` sobre TODO el stack, no solo sobre los servicios que cambiaron:
   # Compose recrea únicamente lo que difiere (imagen nueva, env/puertos/
   # depends_on nuevos en el compose) y deja el resto corriendo. Limitarlo a los
@@ -126,12 +139,25 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   #
   # Las imágenes ya se buildearon arriba; acá `up -d` solo buildea si falta
   # alguna imagen (primer deploy de un servicio nuevo).
+  # `up -d` NO puede abortar el script: si un servicio nuevo no levanta (o
+  # queda unhealthy y frena a los que dependen de él), Compose devuelve error
+  # pero ya recreó todo lo demás — frontend y backend con IP nueva. Cortar acá
+  # deja nginx apuntando a las IPs viejas (502 en todo el stack) y sin
+  # migrations. Se anota el fallo, se sigue con el resto, y el script termina
+  # con error y sin taggear el release.
   echo "==> Aplicando el compose al stack completo"
-  $COMPOSE up -d
+  deploy_failed=false
+  if ! $COMPOSE up -d; then
+    deploy_failed=true
+    echo "ERROR: 'compose up' falló — sigo con nginx/migrations para no dejar el stack a medias." >&2
+  fi
 
-  if [[ " ${changed_services[*]} " == *" backend "* ]]; then
-    echo "==> Backend cambió — corriendo migrations"
-    $COMPOSE exec backend php artisan migrate --force
+  if [[ " ${changed_services[*]} " == *" backend "* ]] || [ "$FORCE" = true ]; then
+    echo "==> Corriendo migrations del backend"
+    if ! $COMPOSE exec backend php artisan migrate --force; then
+      deploy_failed=true
+      echo "ERROR: fallaron las migrations — revisar antes de volver a correr." >&2
+    fi
   fi
 
   # La base del chat (`lis_chat`) es propia y no la crea nadie solo: el init de
@@ -171,9 +197,12 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
 
   # Foto del stack recién desplegado: el mismo tag en todos los repos, para
   # que release-notes.sh pueda decir qué entró desde el deploy anterior. Va
-  # al final porque un deploy que abortó a mitad no es un release. Si falla
-  # (tag repetido, etc) el stack ya está arriba: se avisa y se sigue.
-  if "$INFRA_DIR/scripts/tag-release.sh"; then
+  # al final porque un deploy que falló a mitad no es un release: se corrige
+  # y se vuelve a correr redeploy.sh, que taggea recién cuando sale todo.
+  # Si el tag en sí falla (repetido, etc) el stack ya está arriba: se avisa.
+  if [ "$deploy_failed" = true ]; then
+    echo "==> Deploy con errores: no se taggea el release." >&2
+  elif "$INFRA_DIR/scripts/tag-release.sh"; then
     echo "==> Notas del release: desde tu máquina,"
     echo "    ssh <usuario>@<server> 'bash -s' < scripts/release-notes.sh > releases/cebac/<fecha>.md"
   else
@@ -184,3 +213,10 @@ fi
 
 echo "==> Estado final"
 $COMPOSE ps
+
+if [ "${deploy_failed:-false}" = true ]; then
+  echo >&2
+  echo "DEPLOY CON ERRORES (ver arriba). nginx ya fue reiniciado, así que lo que" >&2
+  echo "levantó está accesible; arreglar lo que falló y correr redeploy.sh --force." >&2
+  exit 1
+fi
