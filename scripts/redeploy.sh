@@ -3,7 +3,9 @@
 # Actualiza lis-infra y los repos de servicio, reconstruye solo las
 # imágenes de los que tuvieron cambios, corre las migrations si el backend
 # cambió, y siempre reinicia nginx/backend-proxy al final si se recreó
-# algún contenedor (el propio o cualquiera de los que proxea).
+# algún contenedor (el propio o cualquiera de los que proxea). Si desplegó
+# algo, cierra taggeando todos los repos con `cebac/<fecha>-<hhmm>`
+# (tag-release.sh), que es de donde release-notes.sh saca el delta.
 #
 # Por qué "siempre": nginx/backend-proxy resuelven el hostname de sus
 # upstreams (`proxy_pass http://frontend:3000`, `fastcgi_pass backend:8000`,
@@ -166,6 +168,18 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ]; then
   #
   # No aborta el deploy si falla: el resto del stack ya está arriba.
   "$INFRA_DIR/scripts/reload-rules-cache.sh" || true
+
+  # Foto del stack recién desplegado: el mismo tag en todos los repos, para
+  # que release-notes.sh pueda decir qué entró desde el deploy anterior. Va
+  # al final porque un deploy que abortó a mitad no es un release. Si falla
+  # (tag repetido, etc) el stack ya está arriba: se avisa y se sigue.
+  if "$INFRA_DIR/scripts/tag-release.sh"; then
+    echo "==> Notas del release: desde tu máquina,"
+    echo "    ssh <usuario>@<server> 'bash -s' < scripts/release-notes.sh > releases/cebac/<fecha>.md"
+  else
+    echo "ADVERTENCIA: no se pudo taggear el release en todos los repos —" >&2
+    echo "             corré scripts/tag-release.sh a mano cuando lo resuelvas." >&2
+  fi
 fi
 
 echo "==> Estado final"
