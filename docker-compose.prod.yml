@@ -155,6 +155,19 @@ services:
         - NEXT_PUBLIC_AUTH_DEBUG_KEEP_POPUP_OPEN
         - NEXT_PUBLIC_ENABLE_DOCUMENT_ANALYSIS
         - NEXT_PUBLIC_ENABLE_CLINICAL_MATCHING
+        # Domicilio del paciente: proveedor de geolocalización y su clave de
+        # browser (restringida por referrer al dominio del LIS).
+        - NEXT_PUBLIC_GEO_PROVIDER
+        - NEXT_PUBLIC_GEO_REGION
+        - NEXT_PUBLIC_GEO_LANGUAGE
+        - NEXT_PUBLIC_GEO_BIAS_LAT
+        - NEXT_PUBLIC_GEO_BIAS_LNG
+        - NEXT_PUBLIC_GEO_BIAS_RADIUS_M
+        - NEXT_PUBLIC_AWS_LOCATION_KEY
+        - NEXT_PUBLIC_AWS_LOCATION_REGION
+        - NEXT_PUBLIC_AWS_LOCATION_MAP_STYLE
+        - NEXT_PUBLIC_GOOGLE_MAPS_KEY
+        - NEXT_PUBLIC_GOOGLE_MAP_ID
     image: lis-frontend:cebac-current
     container_name: lis-frontend
     restart: unless-stopped

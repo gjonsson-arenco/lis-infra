@@ -39,6 +39,12 @@
 - ✅ No `.env` file in Docker image (via .dockerignore)
 - ❌ AWS_TEXTRACT credentials (empty, optional)
 
+**Domicilio del paciente (Amazon Location)** ⚠️
+- `GEO_PROVIDER=aws` (`google` si se vuelve a Google Places)
+- `AWS_LOCATION_KEY=` (see `.env.prod` on server, not committed — API key de servidor: `geo-places:GetPlace`, sin restricción de referrer)
+- `AWS_LOCATION_REGION=sa-east-1` (la región donde se creó la key; contra otra región responde 401)
+- `GEO_HTTP_VERIFY_SSL=true` (`false` sólo en dev, donde el PHP no trae bundle de CA)
+
 ---
 
 ### Broker Gateway (lis-broker-gateway) - `.env.prod`
@@ -111,6 +117,13 @@
 - `PORT=3000`
 - `NEXT_PUBLIC_ENABLE_DOCUMENT_ANALYSIS=true`
 - `NEXT_PUBLIC_ENABLE_CLINICAL_MATCHING=true`
+
+**Domicilio del paciente (Amazon Location)** ⚠️
+- `NEXT_PUBLIC_GEO_PROVIDER=aws`
+- `NEXT_PUBLIC_AWS_LOCATION_KEY=` (see `.env.prod` on server — API key de browser: `geo-places:Autocomplete`, `geo-maps:GetTile`, `geo-maps:GetStyleDescriptor`, restringida por referrer al dominio del LIS)
+- `NEXT_PUBLIC_AWS_LOCATION_REGION=sa-east-1`
+- `NEXT_PUBLIC_GEO_BIAS_LAT` / `NEXT_PUBLIC_GEO_BIAS_LNG` (coordenadas del laboratorio: sesgan las sugerencias)
+- Son build args: están listadas en `docker-compose.prod.yml` y en `Dockerfile.prod`; una variable nueva hay que sumarla en los dos.
 
 **Note:** All `NEXT_PUBLIC_*` variables are exposed to browser (safe to do)
 
