@@ -1,0 +1,4 @@
+Queries de la Labcore API ajustadas al esquema de este cliente. Un archivo
+por sentencia, respetando la ruta del catálogo embebido del repo
+(Orders/GetOrderDetail.sql, Patients/SearchPatients.sql, ...). Se monta en
+/app/sql-overrides del contenedor; la API dice al arrancar cuáles pisó.

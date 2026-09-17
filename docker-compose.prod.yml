@@ -422,10 +422,12 @@ services:
   # Labcore y la envía a su API. Stateless: lo llama sólo el orchestrator y no
   # habla con nadie más del stack. Tampoco lleva env_file.
   #
-  # Habla con la Labcore API (.NET, la administramos nosotros): POST
-  # /api/v1/orders con X-Api-Key. LABCORE_MODE=stub no llama a nadie y sirve
-  # para probar el circuito; en producción va `http` con LABCORE_API_URL (base
-  # sin /api/v1) y una LABCORE_API_KEY con permiso de escritura.
+  # Habla con la Labcore API (.NET, la administramos nosotros — el servicio
+  # `labcore-api` de más abajo): POST /api/v1/orders y GET /api/v1/patients
+  # con X-Api-Key. Por defecto apunta a ese contenedor con LABCORE_MODE=http;
+  # LABCORE_MODE=stub no llama a nadie y sirve para probar el circuito.
+  # LABCORE_API_KEY es la MISMA clave que labcore-api declara como propia
+  # (Api__ApiKeys__0__Key): un solo valor en el .env de lis-infra.
   #
   # La equivalencia de códigos de catálogo (estudios, muestras, médicos…) y la
   # política para lo no mapeado se administran desde el LIS (Admin >
@@ -444,8 +446,8 @@ services:
       GLOBAL_PREFIX: api/v1
       LOG_LEVEL: info
       INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
-      LABCORE_MODE: ${LABCORE_MODE:-stub}
-      LABCORE_API_URL: ${LABCORE_API_URL:-}
+      LABCORE_MODE: ${LABCORE_MODE:-http}
+      LABCORE_API_URL: ${LABCORE_API_URL:-http://labcore-api:5080}
       LABCORE_API_KEY: ${LABCORE_API_KEY:-}
       LABCORE_API_TIMEOUT_MS: 10000
       LABCORE_PRIORITY_CODE_ROUTINE: ${LABCORE_PRIORITY_CODE_ROUTINE:-}
@@ -453,8 +455,73 @@ services:
       LABCORE_PATIENT_TYPE_CODE: ${LABCORE_PATIENT_TYPE_CODE:-}
     networks:
       - lis-network
+    depends_on:
+      # service_started y no service_healthy a propósito: el adapter resuelve
+      # el hostname en cada request, y si la Labcore API está caída el
+      # orchestrator ya reintenta y deja la entrega en `failed`. Bloquear el
+      # arranque del adapter (y por depends_on, el del orchestrator) por una
+      # API que además puede correr en modo stub no suma nada.
+      labcore-api:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Labcore API (.NET 10, Minimal APIs) — la API REST sobre la base de Labcore
+  # (SQL Server) que consume el adapter. Es nuestra, pero NO es un servicio del
+  # LIS: lo que hace es leer y escribir la base del LIS viejo del cliente. Por
+  # eso la base no está en este stack: es el SQL Server que Labcore ya usa, y
+  # la cadena de conexión (LABCORE_LIS_CONNECTION_STRING) apunta ahí, fuera de
+  # Docker. Sin esa base la API arranca igual, pero /health/ready responde 503
+  # y toda orden termina en `failed` en el monitor de integraciones.
+  #
+  # Configuración en tres lugares, según qué sea:
+  #   - secretos (cadena de conexión, clave) → .env de lis-infra, entran por
+  #     `environment` con la sintaxis Seccion__Clave de .NET;
+  #   - lo que depende de la instalación (Lis:Defaults: efector, terminal,
+  #     estados) → labcore-api/appsettings.Production.json, versionado en la
+  #     rama del cliente y montado sobre /app;
+  #   - queries ajustadas al esquema del cliente → labcore-api/sql-overrides/,
+  #     también montado (ver README del repo, "El catálogo de SQL").
+  #
+  # No lo expone nginx: su único consumidor es el adapter, y expone datos de
+  # paciente. Swagger queda accesible sólo desde adentro del stack
+  # (http://labcore-api:5080/swagger).
+  #
+  # El repo tiene un solo Dockerfile, ya de producción (multi-stage, usuario
+  # sin privilegios), como chat-service/orchestrator/adapter.
+  labcore-api:
+    build:
+      context: /opt/lis/labcore-api
+      dockerfile: Dockerfile
+    image: labcore-api:cebac-current
+    container_name: lis-labcore-api
+    restart: unless-stopped
+    environment:
+      Lis__ConnectionString: ${LABCORE_LIS_CONNECTION_STRING}
+      # Una sola clave, la del adapter, con permiso de escritura (crea órdenes).
+      # Otros consumidores (HIS, portal) se agregan como __1__, __2__… o en el
+      # appsettings.Production.json montado.
+      Api__ApiKeys__0__Name: lis-adapter-labcore
+      Api__ApiKeys__0__Key: ${LABCORE_API_KEY}
+      Api__ApiKeys__0__CanWrite: "true"
+    volumes:
+      - ./labcore-api/appsettings.Production.json:/app/appsettings.Production.json:ro
+      - ./labcore-api/sql-overrides:/app/sql-overrides:ro
+      # Serilog escribe logs/labcore-api-<fecha>.log con rotación diaria y 30
+      # días de retención; sobreviven al recreate del contenedor.
+      - labcore-api-logs:/app/logs
+    networks:
+      - lis-network
+    healthcheck:
+      # /health/live y no /health/ready: ready pega al SQL Server de Labcore, y
+      # una base caída no tiene que marcar unhealthy al contenedor (Compose
+      # no lo arregla reiniciándolo). La base se mira con
+      # `curl http://labcore-api:5080/health/ready` desde adentro del stack.
+      test: ["CMD", "curl", "-sf", "http://localhost:5080/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -504,4 +571,6 @@ volumes:
   frontend-logs:
     driver: local
   matcher-logs:
+    driver: local
+  labcore-api-logs:
     driver: local
