@@ -44,6 +44,13 @@ services:
       LIS_ORCHESTRATOR_INTERNAL_TOKEN: ${LIS_ORCHESTRATOR_INTERNAL_TOKEN}
       # Para el tablero de conexiones: el backend le pregunta su estado.
       LIS_ORCHESTRATOR_BASE_URL: http://orchestrator:3020
+      # Búsqueda sincrónica de pacientes en Labcore desde la admisión: el
+      # backend le pega directo al adapter (sin orchestrator). Timeout corto:
+      # si Labcore no contesta, la búsqueda sigue con los pacientes del LIS.
+      LIS_ADAPTER_LABCORE_PATIENT_LOOKUP: ${LIS_ADAPTER_LABCORE_PATIENT_LOOKUP:-true}
+      LIS_ADAPTER_LABCORE_BASE_URL: http://adapter-labcore:3021
+      LIS_ADAPTER_LABCORE_INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
+      LIS_ADAPTER_LABCORE_TIMEOUT_SECONDS: 2
     networks:
       - lis-network
     depends_on:
