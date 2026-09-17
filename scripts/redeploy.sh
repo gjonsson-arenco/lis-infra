@@ -17,9 +17,10 @@
 # Uso: ./scripts/redeploy.sh [--force]
 # Correrlo parado en cualquier lado — resuelve todos los paths solos.
 #
-# --force: aplicar el compose, correr migrations y taggear aunque ningún repo
-# haya traído commits nuevos. Es para rehacer un deploy que falló a mitad
-# (ya se pulleó todo, así que sin esto la segunda corrida no hace nada) o
+# --force: reconstruir TODAS las imágenes, aplicar el compose, correr
+# migrations y taggear aunque ningún repo haya traído commits nuevos. Es para
+# rehacer un deploy que falló a mitad — los repos ya se pullearon, así que sin
+# esto la segunda corrida ve "sin cambios" en todos y no reconstruye nada — y
 # para aplicar un cambio de .env sin código nuevo.
 
 set -euo pipefail
@@ -98,6 +99,16 @@ for repo in "${!REPO_SERVICE[@]}"; do
 done
 
 cd "$INFRA_DIR"
+
+# --force trata a todos los servicios como cambiados: es lo que hace falta
+# cuando los repos ya se pullearon en una corrida anterior que falló. Sin
+# esto, la segunda corrida ve "sin cambios" en todos, no reconstruye ninguna
+# imagen, y `up -d` deja los contenedores viejos corriendo con código nuevo
+# en el repo — exactamente el síntoma de "desplegué y no veo los cambios".
+if [ "$FORCE" = true ]; then
+  changed_services=("${REPO_SERVICE[@]}")
+  echo "==> --force: se reconstruye todo el stack"
+fi
 
 if [ ${#changed_services[@]} -eq 0 ]; then
   echo "No hay servicios con código nuevo — no se reconstruye ninguna imagen."
