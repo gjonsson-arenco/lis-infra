@@ -3,3 +3,6 @@
 !.env.example
 
 nginx/certs/
+
+# Paquetes generados (scripts/build-labcore-api-windows.ps1)
+artifacts/

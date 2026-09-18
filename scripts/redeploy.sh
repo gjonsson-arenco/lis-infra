@@ -48,7 +48,6 @@ declare -A REPO_SERVICE=(
   [lis-chat-service]=chat-service
   [lis-orchestrator]=orchestrator
   [lis-adapters/lis-adapter-labcore]=adapter-labcore
-  [labcore-api]=labcore-api
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no

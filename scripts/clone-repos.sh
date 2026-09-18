@@ -40,10 +40,10 @@ REPOS=(
   # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
   # por adapter (git clone crea la carpeta intermedia).
   "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
-  # La Labcore API no es un servicio del LIS (es la API sobre la base de
-  # Labcore que consume el adapter), pero se buildea y corre en este stack. El
-  # repo se llama distinto que la carpeta: api-lis-labcore.
-  "labcore-api|api-lis-labcore|main"
+  # La Labcore API (repo api-lis-labcore) NO va en este stack: corre como
+  # servicio de Windows en una máquina del cliente (ver
+  # scripts/build-labcore-api-windows.ps1) y el adapter le pega por
+  # LABCORE_API_URL.
 )
 
 mkdir -p "$LIS_ROOT"
@@ -90,18 +90,15 @@ Antes de levantar el stack, para cada repo recién clonado:
      - lis-broker-gateway/.env.prod
      - lis-front-monorepo/apps/lis/.env.prod
      - lis-clinical-matcher/.env.prod
-     - lis-rules-engine, lis-chat-service, lis-orchestrator, los adapters y
-       labcore-api:
+     - lis-rules-engine, lis-chat-service, lis-orchestrator y los adapters:
        NO necesitan .env.prod (toda su config sale del docker-compose.prod.yml).
   2. Revisar que el .env de lis-infra tenga las variables compartidas
      (ver .env.example: MYSQL_*, MYSQL_CHAT_*, LIS_CHAT_CORS_ORIGINS,
      LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN,
      LIS_ORCHESTRATOR_INTERNAL_TOKEN, LIS_ADAPTER_LABCORE_INTERNAL_TOKEN,
-     LABCORE_API_KEY y LABCORE_LIS_CONNECTION_STRING — esta última es la base
-     SQL Server de Labcore, fuera de Docker; sin ella la Labcore API arranca
-     pero ninguna orden llega).
-     Lo que depende de la instalación de Labcore (efector, terminal) va en
-     labcore-api/appsettings.Production.json de lis-infra, no en un .env.
+     LABCORE_API_URL y LABCORE_API_KEY — la Labcore API corre como servicio
+     de Windows en una máquina del cliente, no acá; sin esas dos el adapter
+     no arranca / no autentica).
      La base del chat no hay que crearla a mano: la crea
      scripts/create-chat-db.sh, que redeploy.sh llama en cada deploy.
   3. Levantar/actualizar con: ./scripts/redeploy.sh

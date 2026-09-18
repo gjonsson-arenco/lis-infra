@@ -10,8 +10,8 @@
 # history local, ni en el del server.
 #
 # Uso:
-#   ./scripts/set-infra-env.sh usuario@ip-del-server LABCORE_LIS_CONNECTION_STRING
-#   ./scripts/set-infra-env.sh usuario@ip-del-server LABCORE_API_KEY LABCORE_LIS_CONNECTION_STRING
+#   ./scripts/set-infra-env.sh usuario@ip-del-server LABCORE_API_KEY
+#   ./scripts/set-infra-env.sh usuario@ip-del-server LABCORE_API_KEY LIS_ADAPTER_LABCORE_INTERNAL_TOKEN
 #
 # Un valor con `$` se escribe entre comillas simples: Compose interpola el
 # .env y un `$` suelto en una contraseña se lo comería. Un valor con `$` Y
@@ -128,5 +128,5 @@ REMOTE
 
 echo
 echo "Listo. Para que el contenedor tome el valor nuevo, en el server:"
-echo "  cd /opt/lis/lis-infra && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d labcore-api adapter-labcore"
+echo "  cd /opt/lis/lis-infra && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d adapter-labcore"
 echo "  (o ./scripts/redeploy.sh --force, que recrea todo)"
