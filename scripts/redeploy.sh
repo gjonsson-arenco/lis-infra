@@ -26,12 +26,16 @@
 set -euo pipefail
 
 FORCE=false
-if [ "${1:-}" = "--force" ]; then
-  FORCE=true
-elif [ -n "${1:-}" ]; then
-  echo "Uso: $0 [--force]" >&2
-  exit 2
-fi
+SELF_UPDATED=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+    # Interno: lo pasa el propio script al re-ejecutarse después de pullear
+    # lis-infra (ver más abajo). No usarlo a mano.
+    --self-updated) SELF_UPDATED=true ;;
+    *) echo "Uso: $0 [--force]" >&2; exit 2 ;;
+  esac
+done
 
 LIS_ROOT="/opt/lis"
 INFRA_DIR="$LIS_ROOT/lis-infra"
@@ -86,9 +90,18 @@ pull_repo() {
   return 1
 }
 
+# Si el pull de lis-infra trajo cambios, este archivo puede haber cambiado
+# también, pero bash sigue ejecutando la versión que ya leyó: el mapa
+# REPO_SERVICE viejo contra el compose nuevo. Así fue como una corrida
+# intentó buildear labcore-api después de que el pull lo sacara del compose.
+# Por eso, si infra cambió, se reemplaza el proceso por el script nuevo
+# antes de tocar los demás repos; la segunda pasada ya no pullea infra.
 infra_changed=false
-if pull_repo "$INFRA_DIR"; then
+if [ "$SELF_UPDATED" = true ]; then
   infra_changed=true
+  echo "==> lis-infra: actualizado, corriendo la versión nueva del script"
+elif pull_repo "$INFRA_DIR"; then
+  exec bash "$INFRA_DIR/scripts/redeploy.sh" --self-updated "$@"
 fi
 
 changed_services=()
