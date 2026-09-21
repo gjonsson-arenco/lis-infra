@@ -37,6 +37,9 @@ REPOS=(
   "lis-rules-engine|lis-rules-engine|main"
   "lis-chat-service|lis-chat-service|main"
   "lis-orchestrator|lis-orchestrator|main"
+  # Gateway de facturación electrónica ARCA (WSFEv1). Stateless: usa el Redis
+  # compartido del stack (TA de WSAA, lock por punto de venta e idempotencia).
+  "lis-arca-gateway|lis-arca-gateway|main"
   # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
   # por adapter (git clone crea la carpeta intermedia).
   "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
@@ -90,8 +93,12 @@ Antes de levantar el stack, para cada repo recién clonado:
      - lis-broker-gateway/.env.prod
      - lis-front-monorepo/apps/lis/.env.prod
      - lis-clinical-matcher/.env.prod
-     - lis-rules-engine, lis-chat-service, lis-orchestrator y los adapters:
-       NO necesitan .env.prod (toda su config sale del docker-compose.prod.yml).
+     - lis-rules-engine, lis-chat-service, lis-orchestrator, lis-arca-gateway
+       y los adapters: NO necesitan .env.prod (toda su config sale del
+       docker-compose.prod.yml). lis-arca-gateway sí necesita el certificado
+       y la clave privada de ARCA en /opt/lis/secrets/arca (arca_cert.pem y
+       arca_key.pem, chmod 600) — se montan read-only en el contenedor; sin
+       ellos WSAA no puede firmar el login y no se emite ningún comprobante.
   2. Revisar que el .env de lis-infra tenga las variables compartidas
      (ver .env.example: MYSQL_*, MYSQL_CHAT_*, LIS_CHAT_CORS_ORIGINS,
      LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN,

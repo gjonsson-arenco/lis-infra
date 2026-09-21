@@ -468,6 +468,67 @@ services:
       retries: 3
       start_period: 20s
 
+  # Gateway de facturación electrónica ARCA (FastAPI) — la caja del LIS emite
+  # Factura/NC/ND y recibe el CAE en la misma respuesta. Stateless: no lleva
+  # base de datos (el LIS es la fuente de verdad, ARCA la de la numeración) ni
+  # env_file (toda su config entra por `environment` desde el .env de
+  # lis-infra). Su único estado vive en el Redis COMPARTIDO del stack: cache
+  # del Ticket de Acceso de WSAA (~12h), lock por punto de venta (una emisión
+  # en vuelo por PtoVta, para no romper la correlatividad) e idempotencia por
+  # correlation_id. Va namespaceado por REDIS_KEY_PREFIX=arca para no pisar las
+  # claves del chat/orchestrator en la misma instancia.
+  #
+  # No lo expone nginx: hoy no lo llama el browser (la publicación desde la caja
+  # está pendiente); cuando exista, el backend le pega por la red de Docker en
+  # http://arca-gateway:8000. Su Dockerfile ya es de producción (no hay
+  # Dockerfile.prod), y escucha en 8000 dentro de su propio contenedor: no
+  # choca con el backend (otro contenedor, otra IP).
+  arca-gateway:
+    build:
+      context: /opt/lis/lis-arca-gateway
+      dockerfile: Dockerfile
+    image: lis-arca-gateway:cebac-current
+    container_name: lis-arca-gateway
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      # homologation (testing de ARCA) o production. Los WSDL de WSAA/WSFEv1
+      # cambian según el ambiente, por eso van explícitos abajo.
+      ARCA_ENVIRONMENT: ${ARCA_ENVIRONMENT:-homologation}
+      ARCA_CUIT: ${ARCA_CUIT:?ARCA_CUIT (CUIT del emisor, sin guiones)}
+      ARCA_POINT_OF_SALE: ${ARCA_POINT_OF_SALE:?ARCA_POINT_OF_SALE (punto de venta habilitado en ARCA)}
+      ARCA_SERVICE_NAME: ${ARCA_SERVICE_NAME:-wsfe}
+      ARCA_TIMEOUT_SECONDS: ${ARCA_TIMEOUT_SECONDS:-30}
+      ARCA_WSAA_WSDL: ${ARCA_WSAA_WSDL:-https://wsaahomo.afip.gov.ar/ws/services/LoginCms?wsdl}
+      ARCA_WSFE_WSDL: ${ARCA_WSFE_WSDL:-https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL}
+      # El certificado y la clave privada de ARCA NO están en el repo: se montan
+      # read-only desde el host (ver volumes). Estas rutas son las de adentro
+      # del contenedor.
+      ARCA_CERT_PATH: /run/secrets/arca_cert.pem
+      ARCA_PRIVATE_KEY_PATH: /run/secrets/arca_key.pem
+      # Redis compartido del stack (mismo servicio `redis`), base 0. El prefijo
+      # aísla sus claves de las del resto de los servicios.
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: arca
+    networks:
+      - lis-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # La imagen trae curl (lo instala el Dockerfile).
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    volumes:
+      # Certificado + clave privada de ARCA, fuera del repo y del ciclo de vida
+      # de la imagen. El directorio del host tiene que existir antes del primer
+      # `up`, con arca_cert.pem y arca_key.pem adentro (chmod 600); si no
+      # existe, Docker lo crea root:root vacío y WSAA falla al firmar el login.
+      - /opt/lis/secrets/arca:/run/secrets:ro
+
   # Nginx — TLS termination in front of the 6 services above. Self-signed
   # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
   # first visit to each origin until the cert is accepted/trusted.
