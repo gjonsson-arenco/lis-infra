@@ -12,11 +12,18 @@
 # --seed: sin él la base queda sin usuarios y el respaldo espera en
 # /opt/lis/backups/cebac-users.
 #
+# El CHAT se vacía también (scripts/truncate-chat.sh). No es que el fresh se lo
+# lleve — tiene base propia y nadie la toca — es que el respaldo de usuarios no
+# preserva los ids, y el chat identifica a la gente justamente por el
+# `users.id` del LIS: dejarlo intacto hace que el historial aparezca en la
+# bandeja de quien no era. Con --keep-chat no se toca, a sabiendas de eso.
+#
 # Uso (parado en cualquier lado, se corre EN EL SERVER):
 #   ./scripts/db-fresh.sh              # solo migrate:fresh, pide confirmación
 #   ./scripts/db-fresh.sh --seed       # migrate:fresh + CebacSeeder
 #   ./scripts/db-fresh.sh --seed --yes # sin confirmación (para automatizar)
 #   ./scripts/db-fresh.sh --seed --no-export  # instancia de estreno: nada que salvar
+#   ./scripts/db-fresh.sh --seed --keep-chat  # deja el chat como está (queda desalineado)
 
 set -euo pipefail
 
@@ -30,12 +37,14 @@ SNAPSHOT="/var/www/database/seeders/data/cebac-users.json"
 run_seed=false
 assume_yes=false
 export_users=true
+truncate_chat=true
 
 for arg in "$@"; do
   case "$arg" in
     --seed) run_seed=true ;;
     --yes|-y) assume_yes=true ;;
     --no-export) export_users=false ;;
+    --keep-chat) truncate_chat=false ;;
     *) echo "Argumento desconocido: $arg" >&2; exit 2 ;;
   esac
 done
@@ -53,6 +62,12 @@ echo "Base:    $db_name (contenedor lis-mysql)"
 echo
 echo "migrate:fresh DROPEA TODAS LAS TABLAS de esa base y las vuelve a crear."
 echo "Todo lo que haya cargado ahí se pierde."
+if [ "$truncate_chat" = true ]; then
+  echo "Se vacía además la base del chat, que sin los ids viejos queda inservible."
+else
+  echo "El chat NO se vacía (--keep-chat): su historial va a quedar apuntando a"
+  echo "ids reasignados, o sea en la bandeja de quien no era."
+fi
 echo
 
 if [ "$assume_yes" = false ]; then
@@ -77,6 +92,18 @@ fi
 
 echo "==> migrate:fresh"
 $COMPOSE exec -T backend php artisan migrate:fresh --force
+
+# Después del fresh y no antes: así, si el migrate:fresh falla, el chat queda
+# intacto y coherente con una base que no cambió. Ya se confirmó arriba, así
+# que va con --yes. No aborta si falla — a esta altura la base del LIS ya está
+# dropeada y cortar acá no arregla nada; se avisa y se sigue.
+if [ "$truncate_chat" = true ]; then
+  "$INFRA_DIR/scripts/truncate-chat.sh" --yes || {
+    echo "WARNING: no se pudo vaciar la base del chat." >&2
+    echo "         Hasta que se vacíe, el historial apunta a ids reasignados." >&2
+    echo "         Reintentar con: $INFRA_DIR/scripts/truncate-chat.sh" >&2
+  }
+fi
 
 if [ "$run_seed" = true ]; then
   # El JSON vuelve al contenedor antes de seedear. Parece de más (el export lo
