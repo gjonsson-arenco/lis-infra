@@ -56,6 +56,8 @@ short_name() {
     lis-chat-service) echo chat ;;
     lis-broker-gateway) echo broker ;;
     lis-orchestrator) echo orchestrator ;;
+    lis-arca-gateway) echo arca ;;
+    lis-reports-engine) echo reporting ;;
     lis-adapters/*) echo "${1#lis-adapters/lis-adapter-}" ;;
     lis-infra) echo infra ;;
     *) echo "$1" ;;

@@ -52,6 +52,7 @@ declare -A REPO_SERVICE=(
   [lis-chat-service]=chat-service
   [lis-orchestrator]=orchestrator
   [lis-arca-gateway]=arca-gateway
+  [lis-reports-engine]=reporting-service
   [lis-adapters/lis-adapter-labcore]=adapter-labcore
 )
 

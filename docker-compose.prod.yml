@@ -53,6 +53,31 @@ services:
       LIS_ADAPTER_LABCORE_BASE_URL: http://adapter-labcore:3021
       LIS_ADAPTER_LABCORE_INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
       LIS_ADAPTER_LABCORE_TIMEOUT_SECONDS: ${LIS_ADAPTER_LABCORE_TIMEOUT_SECONDS:-5}
+      # Facturación electrónica: la caja emite contra ARCA a través del
+      # gateway, que además NUMERA (la correlatividad la lleva ARCA). Con
+      # BILLING_AUTHORITY=mock el CAE se inventa y el gateway no se toca:
+      # sirve para probar el circuito sin certificado.
+      BILLING_AUTHORITY: ${BILLING_AUTHORITY:-mock}
+      LIS_ARCA_GATEWAY_BASE_URL: http://arca-gateway:8000
+      LIS_ARCA_GATEWAY_INTERNAL_TOKEN: ${LIS_ARCA_GATEWAY_INTERNAL_TOKEN}
+      # Generoso: adentro del gateway hay dos round-trips SOAP contra ARCA.
+      LIS_ARCA_GATEWAY_TIMEOUT_SECONDS: ${LIS_ARCA_GATEWAY_TIMEOUT_SECONDS:-45}
+      # El CUIT y el punto de venta salen de las MISMAS variables que usa el
+      # gateway: si no coinciden, ARCA rechaza por punto de venta no
+      # habilitado o el QR del ticket queda con un CUIT que no es el que
+      # firmó. La estación puede pisar el punto de venta desde el ABM; esto
+      # es el default. Los datos del emisor que se imprimen
+      # (BILLING_ISSUER_*) van en el .env.prod del backend.
+      BILLING_CUIT: ${ARCA_CUIT}
+      BILLING_POINT_OF_SALE: ${ARCA_POINT_OF_SALE}
+      # Documentos impresos (ticket fiscal, informes): los dibuja
+      # reporting-service. El bucket/key del template tienen que caer dentro
+      # de la allowlist de ese servicio (ver más abajo).
+      LIS_REPORTING_SERVICE_BASE_URL: http://reporting-service:3030
+      LIS_REPORTING_SERVICE_INTERNAL_TOKEN: ${LIS_REPORTING_SERVICE_INTERNAL_TOKEN}
+      # El primer ticket de la mañana espera a que arranque Chromium; los
+      # siguientes salen en poco más de 100ms.
+      LIS_REPORTING_SERVICE_TIMEOUT_SECONDS: ${LIS_REPORTING_SERVICE_TIMEOUT_SECONDS:-20}
     networks:
       - lis-network
     depends_on:
@@ -478,9 +503,9 @@ services:
   # correlation_id. Va namespaceado por REDIS_KEY_PREFIX=arca para no pisar las
   # claves del chat/orchestrator en la misma instancia.
   #
-  # No lo expone nginx: hoy no lo llama el browser (la publicación desde la caja
-  # está pendiente); cuando exista, el backend le pega por la red de Docker en
-  # http://arca-gateway:8000. Su Dockerfile ya es de producción (no hay
+  # No lo expone nginx: el único que lo llama es el backend, por la red de
+  # Docker (http://arca-gateway:8000), cuando la caja emite con
+  # BILLING_AUTHORITY=arca. Su Dockerfile ya es de producción (no hay
   # Dockerfile.prod), y escucha en 8000 dentro de su propio contenedor: no
   # choca con el backend (otro contenedor, otra IP).
   arca-gateway:
@@ -510,6 +535,9 @@ services:
       # aísla sus claves de las del resto de los servicios.
       REDIS_URL: redis://redis:6379/0
       REDIS_KEY_PREFIX: arca
+      # Mismo valor que LIS_ARCA_GATEWAY_INTERNAL_TOKEN en el backend. Vacío
+      # deja el gateway abierto a cualquiera que esté en la red de Docker.
+      INTERNAL_TOKEN: ${LIS_ARCA_GATEWAY_INTERNAL_TOKEN}
     networks:
       - lis-network
     depends_on:
@@ -528,6 +556,68 @@ services:
       # `up`, con arca_cert.pem y arca_key.pem adentro (chmod 600); si no
       # existe, Docker lo crea root:root vacío y WSAA falla al firmar el login.
       - /opt/lis/secrets/arca:/run/secrets:ro
+
+  # Servicio de documentos (Fastify + Playwright) — dibuja lo que el LIS
+  # imprime: hoy el ticket fiscal de la caja, mañana el informe de resultados.
+  # Recibe un payload y devuelve HTML o PDF; no guarda nada (ni el payload, ni
+  # el documento, ni el registro de que se lo pidieron): la fuente de verdad es
+  # el LIS. Sin base, sin Redis y sin env_file.
+  #
+  # No lo expone nginx: el único que lo llama es el backend, por la red de
+  # Docker. El browser nunca le pega — la caja le pide el ticket al LIS y el
+  # LIS le pasa el documento ya dibujado.
+  #
+  # OJO con el build: la imagen sale de mcr.microsoft.com/playwright, que trae
+  # Chromium y sus dependencias. Son ~2 GB y el primer build tarda varios
+  # minutos; no es que se colgó.
+  reporting-service:
+    build:
+      context: /opt/lis/lis-reports-engine
+      dockerfile: Dockerfile
+    image: lis-reporting-service:cebac-current
+    container_name: lis-reporting-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3030
+      # En producción el servicio NO arranca sin token (main.ts lo chequea).
+      # Mismo valor que LIS_REPORTING_SERVICE_INTERNAL_TOKEN en el backend.
+      INTERNAL_TOKEN: ${LIS_REPORTING_SERVICE_INTERNAL_TOKEN:?LIS_REPORTING_SERVICE_INTERNAL_TOKEN (token compartido backend <-> reporting-service)}
+      # `local` sirve los templates que vienen EN la imagen
+      # (src/templates/local-fallback), que es donde vive hoy el ticket de
+      # CEBAC: no hace falta S3 ni credenciales de AWS para facturar. Pasar a
+      # `s3` sólo cuando los templates se publiquen en el bucket.
+      TEMPLATE_SOURCE: ${TEMPLATE_SOURCE:-local}
+      TEMPLATE_LOCAL_PATH: /app/src/templates/local-fallback
+      # El bucket del request se valida contra esta allowlist INCLUSO en modo
+      # local, así que tiene que incluir el de BILLING_DOCUMENT_TEMPLATE_BUCKET
+      # del backend (default: lis-report-templates).
+      ALLOWED_TEMPLATE_BUCKETS: ${ALLOWED_TEMPLATE_BUCKETS:-lis-report-templates}
+      ALLOWED_TEMPLATE_PREFIXES: ${ALLOWED_TEMPLATE_PREFIXES:-customers}
+      # Las credenciales de AWS NO van acá a propósito: el servicio valida que,
+      # si están, no estén vacías, así que pasarlas en blanco lo tira al
+      # arrancar. Al pasar a TEMPLATE_SOURCE=s3 se agregan AWS_REGION,
+      # AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY a esta lista, con valor.
+      #
+      # Bajo /tmp y no bajo /app: el cache es descartable y así no ensucia la
+      # capa de la imagen. En modo local no se usa; en modo s3 es donde caen
+      # los templates bajados.
+      CACHE_DIR: /tmp/reporting-cache
+    networks:
+      - lis-network
+    # Chromium se come el /dev/shm de 64 MB que Docker da por defecto y se cae
+    # con "Target closed" a mitad del render. El servicio lo lanza sin
+    # --disable-dev-shm-usage, así que la memoria compartida se agranda acá.
+    shm_size: 512mb
+    healthcheck:
+      # La imagen de Playwright no trae wget ni curl, pero sí Node 20 con fetch.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Arranca Chromium recién en el primer render, pero la imagen es grande y
+      # el contenedor tarda en estar listo.
+      start_period: 30s
 
   # Nginx — TLS termination in front of the 6 services above. Self-signed
   # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on

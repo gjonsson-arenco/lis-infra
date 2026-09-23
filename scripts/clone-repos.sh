@@ -40,6 +40,10 @@ REPOS=(
   # Gateway de facturación electrónica ARCA (WSFEv1). Stateless: usa el Redis
   # compartido del stack (TA de WSAA, lock por punto de venta e idempotencia).
   "lis-arca-gateway|lis-arca-gateway|main"
+  # Servicio de documentos (el que dibuja el ticket fiscal y los informes). El
+  # repo se sigue llamando lis-reports-engine; el servicio, adentro, es
+  # lis-reporting-service.
+  "lis-reports-engine|lis-reports-engine|main"
   # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
   # por adapter (git clone crea la carpeta intermedia).
   "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
@@ -93,19 +97,27 @@ Antes de levantar el stack, para cada repo recién clonado:
      - lis-broker-gateway/.env.prod
      - lis-front-monorepo/apps/lis/.env.prod
      - lis-clinical-matcher/.env.prod
-     - lis-rules-engine, lis-chat-service, lis-orchestrator, lis-arca-gateway
-       y los adapters: NO necesitan .env.prod (toda su config sale del
-       docker-compose.prod.yml). lis-arca-gateway sí necesita el certificado
-       y la clave privada de ARCA en /opt/lis/secrets/arca (arca_cert.pem y
-       arca_key.pem, chmod 600) — se montan read-only en el contenedor; sin
-       ellos WSAA no puede firmar el login y no se emite ningún comprobante.
+     - lis-rules-engine, lis-chat-service, lis-orchestrator, lis-arca-gateway,
+       lis-reports-engine y los adapters: NO necesitan .env.prod (toda su
+       config sale del docker-compose.prod.yml).
+       Al .env.prod del backend le van además los datos del emisor que salen
+       impresos en el comprobante (BILLING_ISSUER_*): razón social, domicilio,
+       ingresos brutos e inicio de actividades. El CUIT y el punto de venta NO
+       van ahí — los toma del .env de lis-infra, de las mismas variables que
+       usa el gateway.
+       lis-arca-gateway sí necesita el certificado y la clave privada de
+       ARCA en /opt/lis/secrets/arca (arca_cert.pem y arca_key.pem, chmod
+       600) — se montan read-only en el contenedor; sin ellos WSAA no puede
+       firmar el login y no se emite ningún comprobante.
   2. Revisar que el .env de lis-infra tenga las variables compartidas
      (ver .env.example: MYSQL_*, MYSQL_CHAT_*, LIS_CHAT_CORS_ORIGINS,
      LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN,
      LIS_ORCHESTRATOR_INTERNAL_TOKEN, LIS_ADAPTER_LABCORE_INTERNAL_TOKEN,
      LABCORE_API_URL y LABCORE_API_KEY — la Labcore API corre como servicio
      de Windows en una máquina del cliente, no acá; sin esas dos el adapter
-     no arranca / no autentica).
+     no arranca / no autentica; ARCA_CUIT y ARCA_POINT_OF_SALE, obligatorias
+     para el gateway de facturación; y LIS_REPORTING_SERVICE_INTERNAL_TOKEN,
+     sin la cual el servicio de documentos no arranca).
      La base del chat no hay que crearla a mano: la crea
      scripts/create-chat-db.sh, que redeploy.sh llama en cada deploy.
   3. Levantar/actualizar con: ./scripts/redeploy.sh
