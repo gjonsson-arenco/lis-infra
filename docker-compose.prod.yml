@@ -78,6 +78,12 @@ services:
       # El primer ticket de la mañana espera a que arranque Chromium; los
       # siguientes salen en poco más de 100ms.
       LIS_REPORTING_SERVICE_TIMEOUT_SECONDS: ${LIS_REPORTING_SERVICE_TIMEOUT_SECONDS:-20}
+      # Todo lo que le llega a un paciente por mail o WhatsApp sale por
+      # messaging-service: el backend le pide la comunicación y espera el
+      # primer intento (adentro hay un round-trip a SES o a Meta).
+      LIS_MESSAGING_SERVICE_BASE_URL: http://messaging-service:3040
+      LIS_MESSAGING_SERVICE_INTERNAL_TOKEN: ${LIS_MESSAGING_SERVICE_INTERNAL_TOKEN}
+      LIS_MESSAGING_SERVICE_TIMEOUT_SECONDS: ${LIS_MESSAGING_SERVICE_TIMEOUT_SECONDS:-15}
     networks:
       - lis-network
     depends_on:
@@ -619,6 +625,81 @@ services:
       # el contenedor tarda en estar listo.
       start_period: 30s
 
+  # Mensajería a los pacientes (NestJS) — email por SES y WhatsApp por la Cloud
+  # API de Meta, con las plantillas de los dos canales. Base propia
+  # (`lis_messaging`, la crea scripts/create-messaging-db.sh) que es a la vez el
+  # registro de lo enviado y la cola de reintentos.
+  #
+  # No lo expone nginx: el único que lo llama es el backend, por la red de
+  # Docker. Lo que cuentan SES y Meta después (entregado, leído, rebotado) lo
+  # lee él mismo de SQS con long polling: todo el tráfico es saliente, nadie de
+  # afuera le habla al server (ver lis-messaging-service/aws/README.md).
+  #
+  # Arranca con email en `log` y WhatsApp apagado: el primer deploy no necesita
+  # credenciales, y los mails quedan como .eml en el volumen para revisarlos.
+  messaging-service:
+    build:
+      context: /opt/lis/lis-messaging-service
+      dockerfile: Dockerfile
+    image: lis-messaging-service:cebac-current
+    container_name: lis-messaging-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3040
+      GLOBAL_PREFIX: api/v1
+      LOG_LEVEL: info
+      # Mismo valor que LIS_MESSAGING_SERVICE_INTERNAL_TOKEN en el backend.
+      INTERNAL_TOKEN: ${LIS_MESSAGING_SERVICE_INTERNAL_TOKEN:?LIS_MESSAGING_SERVICE_INTERNAL_TOKEN (token compartido backend <-> messaging-service)}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      # Los defaults tienen que ser los mismos que los de create-messaging-db.sh.
+      MYSQL_DATABASE: ${MYSQL_MESSAGING_DATABASE:-lis_messaging}
+      MYSQL_USER: ${MYSQL_MESSAGING_USER:-lis_messaging_user}
+      MYSQL_PASSWORD: ${MYSQL_MESSAGING_PASSWORD}
+      DB_RUN_MIGRATIONS: "true"
+      TEMPLATES_CUSTOMER: cebac
+      # Email: `log` hasta que SES esté configurado para este stack.
+      EMAIL_DRIVER: ${MESSAGING_EMAIL_DRIVER:-log}
+      EMAIL_FROM: ${MESSAGING_EMAIL_FROM:?MESSAGING_EMAIL_FROM (remitente, una identidad verificada en SES)}
+      EMAIL_FROM_NAME: ${MESSAGING_EMAIL_FROM_NAME:-}
+      EMAIL_REPLY_TO: ${MESSAGING_EMAIL_REPLY_TO:-}
+      SES_REGION: ${MESSAGING_AWS_REGION:-us-east-1}
+      SES_CONFIGURATION_SET: ${MESSAGING_SES_CONFIGURATION_SET:-}
+      # WhatsApp: apagado hasta tener el número, el token y las plantillas
+      # aprobadas en Meta.
+      WHATSAPP_ENABLED: ${MESSAGING_WHATSAPP_ENABLED:-false}
+      WHATSAPP_DRIVER: ${MESSAGING_WHATSAPP_DRIVER:-log}
+      WHATSAPP_PHONE_NUMBER_ID: ${MESSAGING_WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_ACCESS_TOKEN: ${MESSAGING_WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_AUTO_REPLY: ${MESSAGING_WHATSAPP_AUTO_REPLY:-}
+      # Los avisos de SES y Meta (outputs del stack de aws/). Vacías: los
+      # mensajes se quedan en `sent`.
+      AWS_REGION: ${MESSAGING_AWS_REGION:-us-east-1}
+      SQS_WHATSAPP_EVENTS_URL: ${MESSAGING_SQS_WHATSAPP_EVENTS_URL:-}
+      SQS_EMAIL_EVENTS_URL: ${MESSAGING_SQS_EMAIL_EVENTS_URL:-}
+      # Credenciales del usuario IAM con la policy del stack de aws/ (SES y
+      # SQS). Vacías el SDK las ignora; hacen falta recién con EMAIL_DRIVER=ses
+      # o con las colas configuradas.
+      AWS_ACCESS_KEY_ID: ${MESSAGING_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${MESSAGING_AWS_SECRET_ACCESS_KEY:-}
+    networks:
+      - lis-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      # Con los drivers `log`, los mails y los WhatsApp quedan acá.
+      - messaging-storage:/app/storage
+    healthcheck:
+      # /health queda fuera de GLOBAL_PREFIX. wget y no curl: node:20-alpine
+      # trae el busybox.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3040/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   # Nginx — TLS termination in front of the 6 services above. Self-signed
   # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
   # first visit to each origin until the cert is accepted/trusted.
@@ -663,4 +744,6 @@ volumes:
   frontend-logs:
     driver: local
   matcher-logs:
+    driver: local
+  messaging-storage:
     driver: local

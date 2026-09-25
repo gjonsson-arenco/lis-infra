@@ -53,6 +53,7 @@ declare -A REPO_SERVICE=(
   [lis-orchestrator]=orchestrator
   [lis-arca-gateway]=arca-gateway
   [lis-reports-engine]=reporting-service
+  [lis-messaging-service]=messaging-service
   [lis-adapters/lis-adapter-labcore]=adapter-labcore
 )
 
@@ -197,6 +198,14 @@ if [ "$infra_changed" = true ] || [ ${#changed_services[@]} -gt 0 ] || [ "$FORCE
   else
     echo "ADVERTENCIA: no se pudo asegurar la base del chat — chat-service va a" >&2
     echo "             quedar reiniciándose. El resto del stack sigue arriba." >&2
+  fi
+
+  # Lo mismo para la base de la mensajería (`lis_messaging`).
+  if "$INFRA_DIR/scripts/create-messaging-db.sh"; then
+    $COMPOSE restart messaging-service
+  else
+    echo "ADVERTENCIA: no se pudo asegurar la base de la mensajería — messaging-service" >&2
+    echo "             va a quedar reiniciándose. El resto del stack sigue arriba." >&2
   fi
 
   # `restart` (no `up -d`): un contenedor bind-mounteado no se recrea solo

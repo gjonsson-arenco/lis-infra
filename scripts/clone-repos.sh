@@ -44,6 +44,8 @@ REPOS=(
   # repo se sigue llamando lis-reports-engine; el servicio, adentro, es
   # lis-reporting-service.
   "lis-reports-engine|lis-reports-engine|main"
+  # Mensajería a los pacientes (email por SES, WhatsApp por la Cloud API).
+  "lis-messaging-service|lis-messaging-service|main"
   # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
   # por adapter (git clone crea la carpeta intermedia).
   "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
