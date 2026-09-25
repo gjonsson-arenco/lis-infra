@@ -84,6 +84,12 @@ services:
       LIS_MESSAGING_SERVICE_BASE_URL: http://messaging-service:3040
       LIS_MESSAGING_SERVICE_INTERNAL_TOKEN: ${LIS_MESSAGING_SERVICE_INTERNAL_TOKEN}
       LIS_MESSAGING_SERVICE_TIMEOUT_SECONDS: ${LIS_MESSAGING_SERVICE_TIMEOUT_SECONDS:-15}
+      # Los avisos automáticos (orden creada, muestras tomadas) salen por un
+      # stream propio, no por el de integraciones: ese sólo lleva lo que una
+      # regla manda a Labcore. La misma variable prende el consumer del
+      # servicio, así no queda uno publicando sin que nadie lea.
+      DOMAIN_EVENTS_MESSAGING_ENABLED: ${MESSAGING_EVENTS_ENABLED:-false}
+      DOMAIN_EVENTS_MESSAGING_STREAM: lis:events:messaging
     networks:
       - lis-network
     depends_on:
@@ -683,10 +689,21 @@ services:
       # o con las colas configuradas.
       AWS_ACCESS_KEY_ID: ${MESSAGING_AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${MESSAGING_AWS_SECRET_ACCESS_KEY:-}
+      # Avisos automáticos: lee lis:events:messaging del Redis del stack con su
+      # propio consumer group. AUTO_COMMUNICATIONS es el freno aviso por aviso
+      # (order.created, samples.collected); vacío no manda ninguno.
+      EVENTS_ENABLED: ${MESSAGING_EVENTS_ENABLED:-false}
+      REDIS_URL: redis://redis:6379
+      EVENTS_STREAM: lis:events:messaging
+      EVENTS_CONSUMER_GROUP: lis-messaging
+      AUTO_COMMUNICATIONS: ${MESSAGING_AUTO_COMMUNICATIONS:-}
+      AUTO_CHANNELS: ${MESSAGING_AUTO_CHANNELS:-whatsapp,email}
     networks:
       - lis-network
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       # Con los drivers `log`, los mails y los WhatsApp quedan acá.
