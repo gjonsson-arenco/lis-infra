@@ -90,6 +90,20 @@ services:
       # servicio, así no queda uno publicando sin que nadie lea.
       DOMAIN_EVENTS_MESSAGING_ENABLED: ${MESSAGING_EVENTS_ENABLED:-false}
       DOMAIN_EVENTS_MESSAGING_STREAM: lis:events:messaging
+      # Llamador de turnos: cada llamado se publica en Reverb, que se lo pasa a
+      # los displays. El backend le habla por la red de Docker; los
+      # navegadores entran por nginx (puerto 6001, con TLS). Si Reverb no está,
+      # el llamado se hace igual (el display lo recupera al reconectarse): los
+      # timeouts cortos son para que el puesto no quede esperando.
+      BROADCAST_CONNECTION: reverb
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_HOST: reverb
+      REVERB_PORT: 8080
+      REVERB_SCHEME: http
+      REVERB_CONNECT_TIMEOUT: 1
+      REVERB_TIMEOUT: 2
     networks:
       - lis-network
     depends_on:
@@ -241,6 +255,68 @@ services:
       start_period: 20s
     volumes:
       - frontend-logs:/app/.next
+
+  # Display del llamador y tótem: dos sitios estáticos (Vite) que sirve un
+  # nginx chico. El nginx del stack los publica bajo el mismo host y puerto
+  # que el LIS (/display/ y /kiosk/), que es la URL que arma Configuración >
+  # Dispositivos. Mismo repo que el frontend: redeploy.sh los buildea juntos.
+  devices-web:
+    build:
+      context: /opt/lis/lis-front-monorepo
+      dockerfile: Dockerfile.devices
+      args:
+        # Las VITE_* se inlinean en el build. Salen del mismo .env.prod del
+        # LIS (redeploy.sh lo exporta antes de buildear) y del .env de
+        # lis-infra (la clave pública de Reverb).
+        VITE_API_CORE_URL: ${NEXT_PUBLIC_API_CORE_URL}
+        VITE_TENANT_ID: ${NEXT_PUBLIC_TENANT_ID:-1}
+        VITE_REVERB_APP_KEY: ${REVERB_APP_KEY}
+        # Vacío = el host de la página, que es el del LIS.
+        VITE_REVERB_HOST: ${REVERB_PUBLIC_HOST:-}
+        VITE_REVERB_PORT: ${REVERB_PUBLIC_PORT:-6001}
+        VITE_REVERB_SCHEME: https
+    image: lis-devices-web:cebac-current
+    container_name: lis-devices-web
+    restart: unless-stopped
+    networks:
+      - lis-network
+
+  # Reverb: el WebSocket del llamador. Misma imagen que el backend (es un
+  # comando de artisan, no un servicio aparte), así que se actualiza solo
+  # cuando se reconstruye el backend: `up -d` lo recrea por imagen nueva.
+  reverb:
+    image: lis-backend:cebac-current
+    container_name: lis-reverb
+    restart: unless-stopped
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    env_file: /opt/lis/lis-backend/.env.prod
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: redis
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_SERVER_HOST: 0.0.0.0
+      REVERB_SERVER_PORT: 8080
+      # Desde qué hosts puede abrir el socket un navegador: el del LIS, que
+      # sirve también el display y el tótem.
+      REVERB_ALLOWED_ORIGINS: ${REVERB_ALLOWED_ORIGINS:-*}
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Clinical Matcher (FastAPI)
   clinical-matcher:
@@ -734,6 +810,8 @@ services:
       - "8001:8001"
       - "3010:3010"
       - "3002:3002"
+      # Reverb (WebSocket del llamador).
+      - "6001:6001"
     networks:
       - lis-network
     depends_on:
@@ -741,7 +819,8 @@ services:
       # nginx no arranca hasta que todos sus depends_on estén healthy, así que
       # un chat roto (base sin crear, migración fallida) dejaría caído el sitio
       # entero. Su server block resuelve el upstream por DNS en cada request
-      # (ver nginx.conf), así que sin chat solo se cae el 3002.
+      # (ver nginx.conf), así que sin chat solo se cae el 3002. Lo mismo
+      # reverb y devices-web: sin ellos se cae el llamador, no el LIS.
       frontend:
         condition: service_healthy
       backend:

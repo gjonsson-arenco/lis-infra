@@ -42,11 +42,13 @@ INFRA_DIR="$LIS_ROOT/lis-infra"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 FRONTEND_ENV="$LIS_ROOT/lis-front-monorepo/apps/lis/.env.prod"
 
-# repo -> nombre del servicio en docker-compose.prod.yml
+# repo -> servicio(s) en docker-compose.prod.yml, separados por espacio. El
+# monorepo del front produce dos imágenes: el LIS y el display/tótem. Reverb
+# no aparece: usa la imagen del backend y `up -d` lo recrea cuando cambia.
 declare -A REPO_SERVICE=(
   [lis-backend]=backend
   [lis-broker-gateway]=broker-gateway
-  [lis-front-monorepo]=frontend
+  [lis-front-monorepo]="frontend devices-web"
   [lis-clinical-matcher]=clinical-matcher
   [lis-rules-engine]=rules-engine
   [lis-chat-service]=chat-service
@@ -110,7 +112,9 @@ fi
 changed_services=()
 for repo in "${!REPO_SERVICE[@]}"; do
   if pull_repo "$LIS_ROOT/$repo"; then
-    changed_services+=("${REPO_SERVICE[$repo]}")
+    # Sin comillas a propósito: un repo puede mapear a varios servicios.
+    # shellcheck disable=SC2206
+    changed_services+=(${REPO_SERVICE[$repo]})
   fi
 done
 
@@ -122,7 +126,8 @@ cd "$INFRA_DIR"
 # imagen, y `up -d` deja los contenedores viejos corriendo con código nuevo
 # en el repo — exactamente el síntoma de "desplegué y no veo los cambios".
 if [ "$FORCE" = true ]; then
-  changed_services=("${REPO_SERVICE[@]}")
+  # shellcheck disable=SC2206
+  changed_services=(${REPO_SERVICE[@]})
   echo "==> --force: se reconstruye todo el stack"
 fi
 
@@ -136,7 +141,9 @@ else
   # docker-compose.prod.yml build.args y linux-deploy-guide.md §6.2), asi
   # que hay que exportarlas ANTES de buildear o el build de frontend falla
   # con "Missing environment variable: NEXT_PUBLIC_...".
-  if [[ " ${changed_services[*]} " == *" frontend "* ]]; then
+  # devices-web también: sus VITE_* salen de las mismas NEXT_PUBLIC_* (la URL
+  # del backend, el tenant).
+  if [[ " ${changed_services[*]} " == *" frontend "* || " ${changed_services[*]} " == *" devices-web "* ]]; then
     if [ ! -f "$FRONTEND_ENV" ]; then
       echo "ERROR: no existe $FRONTEND_ENV, no puedo buildear frontend." >&2
       exit 1
