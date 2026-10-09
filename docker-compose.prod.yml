@@ -53,6 +53,12 @@ services:
       LIS_ADAPTER_LABCORE_BASE_URL: http://adapter-labcore:3021
       LIS_ADAPTER_LABCORE_INTERNAL_TOKEN: ${LIS_ADAPTER_LABCORE_INTERNAL_TOKEN}
       LIS_ADAPTER_LABCORE_TIMEOUT_SECONDS: ${LIS_ADAPTER_LABCORE_TIMEOUT_SECONDS:-5}
+      # Healthbook (el portal del paciente): la ficha y la admisión le preguntan
+      # al adapter si el paciente tiene cuenta en el portal. Best-effort: sin
+      # respuesta, la pantalla sigue sin el indicador.
+      LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
+      LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS: ${LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS:-3}
       # Facturación electrónica: la caja emite contra ARCA a través del
       # gateway, que además NUMERA (la correlatividad la lleva ARCA). Con
       # BILLING_AUTHORITY=mock el CAE se inventa y el gateway no se toca:
@@ -515,6 +521,13 @@ services:
       LABCORE_ADAPTER_TIMEOUT_MS: 10000
       LABCORE_ORIGIN_CODES: ${LABCORE_ORIGIN_CODES:-}
       LABCORE_SERVICE_CODES: ${LABCORE_SERVICE_CODES:-}
+      # Healthbook (el portal del paciente). Qué eventos van (alta, modificación
+      # y cambio de paciente; nunca la toma de muestra) lo dicen las reglas del
+      # LIS; el seeder de CEBAC las deja acotadas al origen PRU.
+      HEALTHBOOK_ENABLED: ${HEALTHBOOK_ENABLED:-true}
+      HEALTHBOOK_ADAPTER_URL: http://adapter-healthbook:3022
+      HEALTHBOOK_ADAPTER_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      HEALTHBOOK_ADAPTER_TIMEOUT_MS: 10000
     networks:
       - lis-network
     depends_on:
@@ -525,6 +538,8 @@ services:
       backend-proxy:
         condition: service_started
       adapter-labcore:
+        condition: service_healthy
+      adapter-healthbook:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3020/health"]
@@ -576,6 +591,50 @@ services:
       - lis-network
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Adapter de Healthbook (NestJS) — traduce la orden canónica a la API de
+  # integración de Healthbook, el portal del paciente, y la envía. Stateless:
+  # lo llaman el orchestrator (alta, modificación y cambio de paciente de la
+  # orden; las muestras no viajan) y el backend (si el paciente tiene cuenta en
+  # el portal, para la ficha y la admisión). Tampoco lleva env_file.
+  #
+  # Habla con lis-healthbook-back (Laravel, nuestro), que NO corre en este
+  # stack: HEALTHBOOK_API_URL apunta a su instalación (base sin /api/v1) y
+  # HEALTHBOOK_API_TOKEN es el token del cliente de integración creado allá
+  # con `php artisan integration:client-create lis-adapter-healthbook arenco`
+  # (ese cliente ya tiene fijado el proveedor arenco). HEALTHBOOK_MODE=stub no
+  # llama a nadie y sirve para probar el circuito.
+  #
+  # La equivalencia de códigos (orígenes, médicos, estudios, tipos de
+  # documento) y la política para lo no mapeado se administran desde el LIS
+  # (Admin > Integraciones > Healthbook) y viajan en cada evento; acá sólo va
+  # el fallback de qué tipos de orden son internación.
+  adapter-healthbook:
+    build:
+      context: /opt/lis/lis-adapters/lis-adapter-healthbook
+      dockerfile: Dockerfile
+    image: lis-adapter-healthbook:cebac-current
+    container_name: lis-adapter-healthbook
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3022
+      GLOBAL_PREFIX: api/v1
+      LOG_LEVEL: info
+      INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      HEALTHBOOK_MODE: ${HEALTHBOOK_MODE:-http}
+      HEALTHBOOK_API_URL: ${HEALTHBOOK_API_URL:?HEALTHBOOK_API_URL (la base de lis-healthbook-back, sin /api/v1)}
+      HEALTHBOOK_API_TOKEN: ${HEALTHBOOK_API_TOKEN:-}
+      HEALTHBOOK_API_TIMEOUT_MS: 10000
+      HEALTHBOOK_INPATIENT_ORDER_TYPE_CODES: ${HEALTHBOOK_INPATIENT_ORDER_TYPE_CODES:-I,G,N,H,INT}
+    networks:
+      - lis-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3022/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -49,6 +49,9 @@ REPOS=(
   # Los adapters de proveedores van agrupados bajo lis-adapters/, un repo
   # por adapter (git clone crea la carpeta intermedia).
   "lis-adapters/lis-adapter-labcore|lis-adapter-labcore|main"
+  # Healthbook, el portal del paciente. lis-healthbook-back tampoco va en este
+  # stack: el adapter le pega por HEALTHBOOK_API_URL.
+  "lis-adapters/lis-adapter-healthbook|lis-adapter-healthbook|main"
   # La Labcore API (repo api-lis-labcore) NO va en este stack: corre como
   # servicio de Windows en una máquina del cliente (ver
   # scripts/build-labcore-api-windows.ps1) y el adapter le pega por

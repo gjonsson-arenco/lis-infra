@@ -57,6 +57,7 @@ declare -A REPO_SERVICE=(
   [lis-reports-engine]=reporting-service
   [lis-messaging-service]=messaging-service
   [lis-adapters/lis-adapter-labcore]=adapter-labcore
+  [lis-adapters/lis-adapter-healthbook]=adapter-healthbook
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no
