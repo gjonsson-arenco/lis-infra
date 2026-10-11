@@ -358,6 +358,8 @@ services:
       # 404 en el log. Se prende en el .env de lis-infra y `up -d scheduler`.
       MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-false}
       MEDICAL_ORDER_PULL_EVERY_SECONDS: ${MEDICAL_ORDER_PULL_EVERY_SECONDS:-15}
+      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
+      VIRTUAL_QUEUE_SYNC_EVERY_SECONDS: ${VIRTUAL_QUEUE_SYNC_EVERY_SECONDS:-15}
     networks:
       - lis-network
     depends_on:
