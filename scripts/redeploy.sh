@@ -44,7 +44,8 @@ FRONTEND_ENV="$LIS_ROOT/lis-front-monorepo/apps/lis/.env.prod"
 
 # repo -> servicio(s) en docker-compose.prod.yml, separados por espacio. El
 # monorepo del front produce dos imágenes: el LIS y el display/tótem. Reverb
-# no aparece: usa la imagen del backend y `up -d` lo recrea cuando cambia.
+# y el scheduler no aparecen: usan la imagen del backend y `up -d` los recrea
+# cuando cambia.
 declare -A REPO_SERVICE=(
   [lis-backend]=backend
   [lis-broker-gateway]=broker-gateway

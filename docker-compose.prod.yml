@@ -59,6 +59,12 @@ services:
       LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
       LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
       LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS: ${LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS:-3}
+      # Documentos (recetas, comprobantes, informes): el disco y el bucket NO
+      # van acá sino en /opt/lis/lis-backend/.env.prod, junto a las
+      # credenciales de AWS que ya usan Textract y Bedrock: DOCUMENTS_DISK=s3,
+      # AWS_BUCKET (el de CEBAC, compartido con Healthbook), AWS_ROOT=lis y
+      # AWS_DEFAULT_REGION. Acá pisarían lo de .env.prod. Pasaje de local a S3
+      # en lis-docs/infra/cebac-s3-documents.md.
       # Facturación electrónica: la caja emite contra ARCA a través del
       # gateway, que además NUMERA (la correlatividad la lleva ARCA). Con
       # BILLING_AUTHORITY=mock el CAE se inventa y el gateway no se toca:
@@ -323,6 +329,42 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Scheduler del backend: corre `schedule:work`, que dispara lo programado en
+  # routes/console.php. Hoy, el pull de órdenes médicas desde Healthbook: el
+  # LIS es on-premise y desde la nube no se le puede hablar, así que cada 15 s
+  # le pregunta al adapter qué cambió (lis-docs/integrations/medical-orders-sync.md).
+  # Misma imagen que el backend, como Reverb: se recrea cuando se reconstruye.
+  # Monta el mismo storage porque con DOCUMENTS_DISK=local los archivos que
+  # importa van ahí; con S3 no hace falta, pero no molesta.
+  scheduler:
+    image: lis-backend:cebac-current
+    container_name: lis-scheduler
+    restart: unless-stopped
+    command: ["php", "artisan", "schedule:work"]
+    env_file: /opt/lis/lis-backend/.env.prod
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_CLIENT: predis
+      LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
+      LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      # Apagado hasta que Healthbook tenga el feed: sin él, cada corrida es un
+      # 404 en el log. Se prende en el .env de lis-infra y `up -d scheduler`.
+      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-false}
+      MEDICAL_ORDER_PULL_EVERY_SECONDS: ${MEDICAL_ORDER_PULL_EVERY_SECONDS:-15}
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - backend-storage:/var/www/storage
 
   # Clinical Matcher (FastAPI)
   clinical-matcher:
