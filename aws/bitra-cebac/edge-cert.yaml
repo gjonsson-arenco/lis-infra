@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  bitra cebac: el certificado de CloudFront. Va en us-east-1 porque CloudFront
+  solo acepta certificados de esa region. El del ALB esta en base.yaml.
+
+Parameters:
+  Domain:
+    Type: String
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref Domain
+      SubjectAlternativeNames: [!Sub '*.${Domain}']
+      # Sin DomainValidationOptions: el CNAME de validacion es el mismo que el
+      # del certificado del ALB y ya lo crea base.yaml. Va despues de base.
+      ValidationMethod: DNS
+
+Outputs:
+  CertificateArn:
+    Description: Para las distribuciones de CloudFront (no hay exports entre regiones).
+    Value: !Ref Certificate

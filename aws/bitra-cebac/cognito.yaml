@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  bitra cebac: el user pool y su app client. Misma configuracion que el pool
+  de test (healthbook-cebac-test) mas el ingreso por codigo (CUSTOM_AUTH).
+  Ver "User pool de Healthbook" en el README de lis-healthbook-back.
+
+Parameters:
+  PoolName:
+    Type: String
+    Default: cebac.bitra-care.com
+  # Las tres Lambdas del ingreso por codigo (stack healthbook-cebac-cognito-auth).
+  # Vacias en el primer deploy: el stack de las Lambdas necesita el id del pool.
+  DefineAuthChallengeArn:
+    Type: String
+    Default: ''
+  CreateAuthChallengeArn:
+    Type: String
+    Default: ''
+  VerifyAuthChallengeArn:
+    Type: String
+    Default: ''
+
+Conditions:
+  HasAuthLambdas: !Not [!Equals [!Ref DefineAuthChallengeArn, '']]
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    # El pool tiene las cuentas de los pacientes: borrar el stack no lo borra.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Ref PoolName
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: ACTIVE
+      # El username es un UUID que nadie ve; se entra con el email o el WhatsApp.
+      AliasAttributes: [email, phone_number]
+      UsernameConfiguration:
+        CaseSensitive: false
+      # El canal lo verifica bitra: el pool no manda mails ni SMS.
+      MfaConfiguration: 'OFF'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireUppercase: false
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: hb_user_id
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: '1'
+            MaxLength: '20'
+      LambdaConfig: !If
+        - HasAuthLambdas
+        - DefineAuthChallenge: !Ref DefineAuthChallengeArn
+          CreateAuthChallenge: !Ref CreateAuthChallengeArn
+          VerifyAuthChallengeResponse: !Ref VerifyAuthChallengeArn
+        - !Ref AWS::NoValue
+      UserPoolTags:
+        Project: bitra
+        Customer: cebac
+        Environment: test
+
+  # Un solo client publico para el web, la app y el back (COGNITO_CLIENT_ID).
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: bitra-cebac-app
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AuthSessionValidity: 3
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      # custom:hb_user_id lo escribe solo el backend (Admin*); el client lo lee.
+      ReadAttributes:
+        - custom:hb_user_id
+        - email
+        - email_verified
+        - name
+        - phone_number
+        - phone_number_verified
+      WriteAttributes:
+        - name
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+    Export:
+      Name: bitra-cebac-user-pool-id
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: bitra-cebac-user-pool-arn
+  AppClientId:
+    Description: COGNITO_CLIENT_ID del back, NEXT_PUBLIC_COGNITO_CLIENT_ID y EXPO_PUBLIC_COGNITO_CLIENT_ID.
+    Value: !Ref AppClient
+    Export:
+      Name: bitra-cebac-app-client-id

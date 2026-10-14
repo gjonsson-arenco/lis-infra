@@ -1,0 +1,335 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  bitra cebac: lo comun a los tres servicios. ECR, security groups, ALB,
+  cluster de ECS con Service Connect, logs, el rol de ejecucion de las tasks y
+  el bucket de subidas de los pacientes. Los services van en sus propios stacks.
+
+Parameters:
+  Domain:
+    Type: String
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  CloudFrontPrefixList:
+    Type: String
+    Description: com.amazonaws.global.cloudfront.origin-facing de la region.
+  CebacIp:
+    Type: String
+    Default: ''
+    Description: IP publica de salida de CEBAC, sin /32. Vacia, no entra.
+
+Conditions:
+  HasCebacIp: !Not [!Equals [!Ref CebacIp, '']]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Certificado del ALB (el de CloudFront esta en edge-cert.yaml, us-east-1)
+  # ---------------------------------------------------------------------------
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref Domain
+      SubjectAlternativeNames: [!Sub '*.${Domain}']
+      ValidationMethod: DNS
+      # ACM le da a la cuenta un solo CNAME de validacion para el dominio y su
+      # wildcard, en todas las regiones. Este stack lo crea (con la zona solo en
+      # el dominio: dos entradas lo duplican y Route 53 lo rechaza) y el
+      # certificado de CloudFront (edge-cert.yaml) se valida con el mismo.
+      DomainValidationOptions:
+        - DomainName: !Ref Domain
+          HostedZoneId: !Ref HostedZoneId
+
+  # ---------------------------------------------------------------------------
+  # Imagenes
+  # ---------------------------------------------------------------------------
+  WebRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: bitra-web
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Las ultimas 10 imagenes","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: bitra-api
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Las ultimas 10 imagenes","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+
+  MessagingRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: lis-messaging
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Las ultimas 10 imagenes","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+
+  # ---------------------------------------------------------------------------
+  # Red. El ALB no esta abierto a internet: solo CloudFront y la IP de CEBAC.
+  # ---------------------------------------------------------------------------
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: bitra-cebac-alb
+      GroupDescription: bitra cebac ALB - 443 desde CloudFront y desde CEBAC
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourcePrefixListId: !Ref CloudFrontPrefixList
+          Description: CloudFront (origin-facing)
+      Tags:
+        - { Key: Name, Value: bitra-cebac-alb }
+
+  AlbIngressFromCebac:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCebacIp
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Sub '${CebacIp}/32'
+      Description: CEBAC on-prem (msg.)
+
+  TasksSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: bitra-cebac-tasks
+      GroupDescription: bitra cebac tasks de ECS - solo desde el ALB y entre ellas
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 3000, ToPort: 3000, SourceSecurityGroupId: !Ref AlbSecurityGroup, Description: bitra-web }
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref AlbSecurityGroup, Description: bitra-api }
+        - { IpProtocol: tcp, FromPort: 3040, ToPort: 3040, SourceSecurityGroupId: !Ref AlbSecurityGroup, Description: lis-messaging }
+      Tags:
+        - { Key: Name, Value: bitra-cebac-tasks }
+
+  # Service Connect: bitra-api le habla a lis-messaging por la red interna.
+  TasksIngressFromTasks:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TasksSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3040
+      ToPort: 3040
+      SourceSecurityGroupId: !Ref TasksSecurityGroup
+      Description: Service Connect a lis-messaging
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: bitra-cebac
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        - { Key: routing.http.drop_invalid_header_fields.enabled, Value: 'true' }
+        - { Key: idle_timeout.timeout_seconds, Value: '60' }
+
+  # Lo que no coincide con una regla de host (y del header de CloudFront) es 403.
+  # Las reglas las agrega el stack de cada servicio.
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '403'
+            ContentType: text/plain
+            MessageBody: Forbidden
+
+  # ---------------------------------------------------------------------------
+  # ECS
+  # ---------------------------------------------------------------------------
+  Namespace:
+    Type: AWS::ServiceDiscovery::HttpNamespace
+    Properties:
+      Name: bitra-cebac
+      Description: Service Connect de bitra cebac
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: bitra-cebac
+      CapacityProviders: [FARGATE, FARGATE_SPOT]
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+      ServiceConnectDefaults:
+        Namespace: !GetAtt Namespace.Arn
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  WebLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/bitra-cebac/web
+      RetentionInDays: 30
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/bitra-cebac/api
+      RetentionInDays: 30
+
+  MessagingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/bitra-cebac/messaging
+      RetentionInDays: 30
+
+  # Lo usa ECS para arrancar las tasks: bajar la imagen, escribir logs y leer
+  # los secretos de SSM. Lo que hace cada servicio va en su task role.
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bitra-cebac-ecs-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/bitra/cebac/*
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/healthbook/cebac/*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+  # ---------------------------------------------------------------------------
+  # Subidas de los pacientes (ordenes medicas, respuestas a presupuestos). El
+  # bucket de documentos es el de v1 en produccion: bitra solo lo lee.
+  # ---------------------------------------------------------------------------
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: bitra-cebac-uploads
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-viejas
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  UploadsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt UploadsBucket.Arn
+              - !Sub '${UploadsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate
+    Export: { Name: bitra-cebac-alb-certificate-arn }
+  LoadBalancerArn:
+    Value: !Ref LoadBalancer
+    Export: { Name: bitra-cebac-alb-arn }
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+    Export: { Name: bitra-cebac-alb-dns-name }
+  LoadBalancerHostedZoneId:
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Export: { Name: bitra-cebac-alb-hosted-zone-id }
+  HttpsListenerArn:
+    Value: !Ref HttpsListener
+    Export: { Name: bitra-cebac-https-listener-arn }
+  TasksSecurityGroupId:
+    Value: !Ref TasksSecurityGroup
+    Export: { Name: bitra-cebac-tasks-sg }
+  SubnetIds:
+    Value: !Join [',', !Ref SubnetIds]
+    Export: { Name: bitra-cebac-subnet-ids }
+  VpcId:
+    Value: !Ref VpcId
+    Export: { Name: bitra-cebac-vpc-id }
+  ClusterName:
+    Value: !Ref Cluster
+    Export: { Name: bitra-cebac-cluster }
+  NamespaceArn:
+    Value: !GetAtt Namespace.Arn
+    Export: { Name: bitra-cebac-namespace-arn }
+  ExecutionRoleArn:
+    Value: !GetAtt ExecutionRole.Arn
+    Export: { Name: bitra-cebac-execution-role-arn }
+  WebRepositoryUri:
+    Value: !GetAtt WebRepository.RepositoryUri
+    Export: { Name: bitra-cebac-web-repository-uri }
+  ApiRepositoryUri:
+    Value: !GetAtt ApiRepository.RepositoryUri
+    Export: { Name: bitra-cebac-api-repository-uri }
+  MessagingRepositoryUri:
+    Value: !GetAtt MessagingRepository.RepositoryUri
+    Export: { Name: bitra-cebac-messaging-repository-uri }
+  WebLogGroup:
+    Value: !Ref WebLogGroup
+    Export: { Name: bitra-cebac-web-log-group }
+  ApiLogGroup:
+    Value: !Ref ApiLogGroup
+    Export: { Name: bitra-cebac-api-log-group }
+  MessagingLogGroup:
+    Value: !Ref MessagingLogGroup
+    Export: { Name: bitra-cebac-messaging-log-group }
+  UploadsBucketName:
+    Value: !Ref UploadsBucket
+    Export: { Name: bitra-cebac-uploads-bucket }
+  UploadsBucketArn:
+    Value: !GetAtt UploadsBucket.Arn
+    Export: { Name: bitra-cebac-uploads-bucket-arn }

@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  bitra cebac: lis-messaging-service en ECS Fargate. Una sola instancia para
+  bitra y (desde el corte) el LIS de CEBAC. bitra-api le habla por Service
+  Connect (http://lis-messaging:3040). Todavia sin entrada por el ALB: msg.
+  se suma con la IP de CEBAC, en el corte.
+
+Parameters:
+  ImageTag:
+    Type: String
+  DesiredCount:
+    Type: Number
+    Default: 1
+  Domain:
+    Type: String
+  DbHost:
+    Type: String
+  ServicePolicyArn:
+    Type: String
+    Description: lis-messaging-<cliente>-service, del stack SAM de lis-messaging-service (SES y colas).
+  ConfigurationSet:
+    Type: String
+  EmailEventsQueueUrl:
+    Type: String
+  WhatsAppEventsQueueUrl:
+    Type: String
+
+Resources:
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: bitra-cebac-messaging-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      # Mandar por SES y leer las colas de eventos: la misma policy que usaria
+      # el usuario IAM de un servicio on-prem.
+      ManagedPolicyArns:
+        - !Ref ServicePolicyArn
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: bitra-cebac-messaging
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn: !ImportValue bitra-cebac-execution-role-arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: messaging
+          Image: !Sub
+            - '${Repository}:${ImageTag}'
+            - Repository: !ImportValue bitra-cebac-messaging-repository-uri
+          Essential: true
+          PortMappings:
+            - Name: messaging
+              ContainerPort: 3040
+              Protocol: tcp
+              AppProtocol: http
+          HealthCheck:
+            Command: [CMD-SHELL, 'wget -qO- http://127.0.0.1:3040/health || exit 1']
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !ImportValue bitra-cebac-messaging-log-group
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: messaging
+          Environment:
+            - { Name: NODE_ENV, Value: production }
+            - { Name: PORT, Value: '3040' }
+            - { Name: LOG_LEVEL, Value: info }
+            - { Name: MYSQL_HOST, Value: !Ref DbHost }
+            - { Name: MYSQL_PORT, Value: '3306' }
+            - { Name: MYSQL_DATABASE, Value: lis_messaging }
+            - { Name: MYSQL_USER, Value: lis_messaging }
+            - { Name: DB_RUN_MIGRATIONS, Value: 'true' }
+            - { Name: TEMPLATES_CUSTOMER, Value: cebac }
+            - { Name: EMAIL_DRIVER, Value: ses }
+            - { Name: EMAIL_FROM, Value: !Sub 'no-reply@${Domain}' }
+            - { Name: EMAIL_FROM_NAME, Value: CEBAC }
+            - { Name: SES_REGION, Value: !Ref AWS::Region }
+            - { Name: SES_CONFIGURATION_SET, Value: !Ref ConfigurationSet }
+            # WhatsApp apagado hasta tener numero, token y plantillas en Meta.
+            - { Name: WHATSAPP_ENABLED, Value: 'false' }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - { Name: SQS_EMAIL_EVENTS_URL, Value: !Ref EmailEventsQueueUrl }
+            - { Name: SQS_WHATSAPP_EVENTS_URL, Value: !Ref WhatsAppEventsQueueUrl }
+            # Los avisos automaticos del LIS llegan por SQS desde el corte.
+            - { Name: EVENTS_ENABLED, Value: 'false' }
+          Secrets:
+            - Name: INTERNAL_TOKEN
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/bitra/cebac/messaging/internal-token
+            - Name: MYSQL_PASSWORD
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/bitra/cebac/messaging/db-password
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: lis-messaging
+      Cluster: !ImportValue bitra-cebac-cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PropagateTags: SERVICE
+      EnableECSManagedTags: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !ImportValue bitra-cebac-subnet-ids]
+          SecurityGroups: [!ImportValue bitra-cebac-tasks-sg]
+      ServiceConnectConfiguration:
+        Enabled: true
+        Services:
+          - PortName: messaging
+            DiscoveryName: lis-messaging
+            ClientAliases:
+              - Port: 3040
+                DnsName: lis-messaging
+
+Outputs:
+  ServiceName:
+    Value: !GetAtt Service.Name
+  InternalUrl:
+    Description: MESSAGING_URL de bitra-api.
+    Value: http://lis-messaging:3040

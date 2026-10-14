@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  bitra cebac: el dominio cebac.bitra-care.com como identidad de SES (DKIM en
+  Route 53). Desde ahi manda lis-messaging (no-reply@cebac.bitra-care.com).
+  La cuenta ya tiene acceso de produccion en sa-east-1.
+
+Parameters:
+  Domain:
+    Type: String
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+
+Resources:
+  Identity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref Domain
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      FeedbackAttributes:
+        # Los rebotes y quejas llegan por el configuration set (SNS -> SQS).
+        EmailForwardingEnabled: false
+
+  Dkim1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue1]
+
+  Dkim2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue2]
+
+  Dkim3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue3]
+
+  # DMARC minimo: sin el, Gmail y Yahoo tratan peor los envios masivos.
+  Dmarc:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '_dmarc.${Domain}'
+      Type: TXT
+      TTL: '1800'
+      ResourceRecords: ['"v=DMARC1; p=none;"']
+
+Outputs:
+  IdentityArn:
+    Description: SesIdentityArn del stack de lis-messaging.
+    Value: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${Domain}
+    Export: { Name: bitra-cebac-ses-identity-arn }
