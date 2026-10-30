@@ -137,7 +137,7 @@ Resources:
             - { Name: LAB_SLUG, Value: cebac }
             - { Name: LAB_NAME, Value: CEBAC Laboratorios }
             - { Name: LAB_SHORT_NAME, Value: CEBAC }
-            - { Name: LAB_LOCATION, Value: Posadas, Misiones }
+            - { Name: LAB_LOCATION, Value: 'Posadas, Misiones' }
             - { Name: LAB_LOGO_URL, Value: !Sub 'https://${Domain}/brand/cebac_logo_horizontal.png' }
             - { Name: LAB_COLOR_PRIMARY, Value: '#29ABE2' }
             - { Name: LAB_COLOR_INK, Value: '#16425B' }
