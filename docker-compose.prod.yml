@@ -58,6 +58,10 @@ services:
       # respuesta, la pantalla sigue sin el indicador.
       LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
       LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      # La foto de la fila virtual sale al instante por la cola (la manda el
+      # worker); sin el flag acá el puesto no encola nada y queda el ciclo de 15 s.
+      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
+      QUEUE_CONNECTION: database
       LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS: ${LIS_ADAPTER_HEALTHBOOK_TIMEOUT_SECONDS:-3}
       # Documentos (recetas, comprobantes, informes): el disco y el bucket NO
       # van acá sino en /opt/lis/lis-backend/.env.prod, junto a las
@@ -360,6 +364,42 @@ services:
       MEDICAL_ORDER_PULL_EVERY_SECONDS: ${MEDICAL_ORDER_PULL_EVERY_SECONDS:-15}
       VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
       VIRTUAL_QUEUE_SYNC_EVERY_SECONDS: ${VIRTUAL_QUEUE_SYNC_EVERY_SECONDS:-15}
+    networks:
+      - lis-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - backend-storage:/var/www/storage
+
+  # Worker de colas (driver database, tabla `jobs`). Lo que no puede esperar
+  # en un pedido ni frenar el scheduler: el análisis OCR/IA de cada orden
+  # médica que entra de bitra (AnalyzeMedicalOrder, 10-60 s por receta) y la
+  # foto de la fila virtual al instante (PushVirtualQueueSiteSnapshot).
+  # Mismo entorno que el scheduler: usa el matcher, Textract y el adapter.
+  worker:
+    image: lis-backend:cebac-current
+    container_name: lis-worker
+    restart: unless-stopped
+    command: ["php", "artisan", "queue:work", "--tries=3", "--timeout=200", "--sleep=3", "--max-time=3600"]
+    env_file: /opt/lis/lis-backend/.env.prod
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      QUEUE_CONNECTION: database
+      REDIS_HOST: redis
+      REDIS_CLIENT: predis
+      LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
+      LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
+      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-false}
+      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
+    healthcheck:
+      # Hereda el `nc -z 8000` de la imagen del backend, que acá no escucha nada.
+      disable: true
     networks:
       - lis-network
     depends_on:
