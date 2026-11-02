@@ -21,8 +21,11 @@ CLOUDFRONT_PREFIX_LIST=pl-5da64334
 # msg.cebac.bitra-care.com no existe todavía.
 CEBAC_IP=
 
-# Base de bitra: healthbook-test, la copia de producción (no healthbook-cebac-pr).
-DB_HOST=healthbook-test.ccf1edaxmims.sa-east-1.rds.amazonaws.com
+# Base de bitra: bitra-cebac-db, restore del snapshot de producción de v1
+# (healthbook-cebac-prod) del 2026-11-02. Privada: sólo entran las tasks de
+# bitra (security group bitra-cebac-db). No es healthbook-cebac-prod ni
+# healthbook-cebac-pr, que son de v1.
+DB_HOST=bitra-cebac-db.ccf1edaxmims.sa-east-1.rds.amazonaws.com
 DB_DATABASE=ebdb
 DB_USERNAME=healthbook
 
