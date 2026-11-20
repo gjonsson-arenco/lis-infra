@@ -149,8 +149,9 @@ El issuer tiene que ser de Let's Encrypt (`R1x`/`E1x`), no `CN=192.168.4.95`.
 ### 5. Reapuntar lo que tenía la IP
 
 El origen del LIS pasa de `https://192.168.4.95:3000` a
-`https://qa.cebac.ankra-lis.com:3000`. Con un certificado emitido para el nombre,
-entrar por IP vuelve a dar aviso de certificado, así que se reapunta todo junto:
+`https://qa.cebac.ankra-lis.com` (nginx sirve el front en 443 y en 3000; el 80
+redirige a https). Con un certificado emitido para el nombre, entrar por IP
+vuelve a dar aviso de certificado, así que se reapunta todo junto:
 
 1. **Front** (`/opt/lis/lis-front-monorepo/apps/lis/.env.prod`): las
    `NEXT_PUBLIC_API_*_URL`, `NEXT_PUBLIC_COGNITO_REDIRECT_URI` y

@@ -963,6 +963,9 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
     ports:
+      # 80 redirige a https; 443 es el front sin puerto en la URL.
+      - "80:80"
+      - "443:443"
       - "3000:3000"
       - "8000:8000"
       - "3001:3001"
