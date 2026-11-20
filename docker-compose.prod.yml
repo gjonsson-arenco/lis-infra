@@ -936,13 +936,29 @@ services:
       retries: 3
       start_period: 20s
 
-  # Nginx — TLS termination in front of the 6 services above. Self-signed
-  # cert (see nginx/generate-self-signed-cert.sh); browsers will warn on
-  # first visit to each origin until the cert is accepted/trusted.
+  # Nginx — TLS termination in front of the 6 services above. El certificado
+  # lo deja el servicio `certbot` (más abajo) en ./nginx/certs como
+  # server.crt/server.key; hasta la primera emisión sirve el autofirmado de
+  # nginx/generate-self-signed-cert.sh, que escribe los mismos archivos.
   nginx:
     image: nginx:1.27-alpine
     container_name: lis-nginx
     restart: unless-stopped
+    # nginx carga el certificado al arrancar y no vuelve a mirar el archivo.
+    # Al costado del proceso principal corre un watcher que cada 5 minutos
+    # compara la fecha de server.crt con una marca dejada al arrancar y, si es
+    # más nuevo (certbot lo renovó), hace `nginx -s reload`: recarga en
+    # caliente, sin cortar conexiones. Así certbot no necesita el socket de
+    # Docker ni saber nada de nginx: sólo comparten ./nginx/certs.
+    command: >
+      sh -c 'touch /tmp/cert.stamp;
+             ( while sleep 300; do
+                 if [ /etc/nginx/certs/server.crt -nt /tmp/cert.stamp ]; then
+                   touch /tmp/cert.stamp;
+                   nginx -s reload && echo "nginx: certificado nuevo en /etc/nginx/certs, recargado";
+                 fi;
+               done ) &
+             exec nginx -g "daemon off;"'
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
@@ -975,8 +991,43 @@ services:
       rules-engine:
         condition: service_healthy
 
+  # Certificado TLS del LIS: Let's Encrypt validando por DNS contra Route53
+  # (el server no recibe conexiones desde internet, sólo sale). Emite para
+  # LIS_PUBLIC_HOST, renueva solo, y copia el resultado a ./nginx/certs, de
+  # donde lo lee nginx. Si falla, nginx sigue con el certificado que tenga.
+  # Puesta en marcha, usuario IAM y qué reapuntar: nginx/certbot/README.md.
+  #
+  # Sin depends_on ni healthcheck a propósito: no es parte del camino crítico
+  # del LIS. nginx arranca con el certificado que haya en ./nginx/certs.
+  certbot:
+    image: certbot/dns-route53:v5.10.0
+    container_name: lis-certbot
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/certbot-lis/entrypoint.sh"]
+    environment:
+      LIS_PUBLIC_HOST: ${LIS_PUBLIC_HOST:?LIS_PUBLIC_HOST sin definir en el .env}
+      LIS_CERT_EXTRA_DOMAINS: ${LIS_CERT_EXTRA_DOMAINS:-}
+      LIS_CERT_EMAIL: ${LIS_CERT_EMAIL:-}
+      LIS_CERT_STAGING: ${LIS_CERT_STAGING:-false}
+      # Usuario IAM acotado al TXT _acme-challenge de la zona
+      # (aws/onprem-cebac/certbot-route53-policy.json). Route53 es global;
+      # la región es sólo para que boto3 no se queje.
+      AWS_ACCESS_KEY_ID: ${CERTBOT_AWS_ACCESS_KEY_ID:?CERTBOT_AWS_ACCESS_KEY_ID sin definir en el .env}
+      AWS_SECRET_ACCESS_KEY: ${CERTBOT_AWS_SECRET_ACCESS_KEY:?CERTBOT_AWS_SECRET_ACCESS_KEY sin definir en el .env}
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./nginx/certbot:/opt/certbot-lis:ro
+      # Cuenta ACME y lineages: se conservan entre recreaciones del contenedor.
+      - letsencrypt:/etc/letsencrypt
+      # El mismo bind mount que lee nginx (ahí deja server.crt/server.key).
+      - ./nginx/certs:/certs
+    networks:
+      - lis-network
+
 volumes:
   backend-storage:
+    driver: local
+  letsencrypt:
     driver: local
   broker-logs:
     driver: local

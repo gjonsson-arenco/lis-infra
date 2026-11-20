@@ -2,6 +2,12 @@
 # Generates a self-signed TLS cert for the server's IP (used as SAN — modern
 # browsers reject certs that only set CN, they require subjectAltName).
 #
+# Since 2026-11 this is only the BOOTSTRAP cert: it gives nginx something to
+# start with on a fresh install, and the `certbot` service then replaces
+# server.crt/server.key with a Let's Encrypt cert for LIS_PUBLIC_HOST (see
+# certbot/README.md). Don't run it on a server that already has the Let's
+# Encrypt cert installed unless you mean to roll back to self-signed.
+#
 # Usage: ./generate-self-signed-cert.sh [ip]
 #   ip defaults to 192.168.4.95 (CEBAC server)
 #
