@@ -389,6 +389,9 @@ services:
     restart: unless-stopped
     command: ["php", "artisan", "schedule:work"]
     env_file: /opt/lis/lis-backend/.env.prod
+    healthcheck:
+      # Hereda el `nc -z 8000` de la imagen del backend, que acá no escucha nada.
+      disable: true
     environment:
       DB_CONNECTION: mysql
       DB_HOST: mysql
