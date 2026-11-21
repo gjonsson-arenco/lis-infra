@@ -2,6 +2,25 @@ networks:
   lis-network:
     external: true
 
+# Respaldos (Administración > Respaldos; lis-docs/infra/backups.md). Lo
+# comparten backend (el panel: estado, borrar copias), scheduler (dispara
+# `backups:run` a la hora configurada) y worker ("Ejecutar ahora" y
+# "Verificar"). Los dos destinos son bind mounts del host:
+#   /opt/lis/backups    disco del server (copia local, pocos días)
+#   /mnt/lis-backups    el storage de respaldos de CEBAC (share SMB/NFS en
+#                       fstab). Hasta que esté montado, el archivo marcador
+#                       `.lis-backups` no existe y el LIS no copia ahí.
+x-lis-backup-env: &lis-backup-env
+  BACKUP_ENABLED: ${BACKUP_ENABLED:-}
+  BACKUP_DB_USERNAME: ${BACKUP_DB_USERNAME:-}
+  BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:-}
+  BACKUP_DATABASES: ${MYSQL_DATABASE},${MYSQL_CHAT_DATABASE:-lis_chat},${MYSQL_MESSAGING_DATABASE:-lis_messaging}
+  BACKUP_LOCAL_PATH: /backups/local
+  BACKUP_SECONDARY_PATH: /backups/secondary
+  BACKUP_VERIFY_DATABASE: ${BACKUP_VERIFY_DATABASE:-lis_restore_check}
+# Los dos mounts van repetidos en backend, scheduler y worker (YAML no
+# concatena listas): /opt/lis/backups:/backups/local y /mnt/lis-backups:/backups/secondary.
+
 services:
   # LIS Backend (Laravel + PHP-FPM)
   backend:
@@ -13,6 +32,7 @@ services:
     restart: unless-stopped
     env_file: /opt/lis/lis-backend/.env.prod
     environment:
+      <<: *lis-backup-env
       # Override for Docker environment
       DB_CONNECTION: mysql
       DB_HOST: mysql
@@ -157,6 +177,9 @@ services:
       # scripts/copy-requirements.sh; si no existe, Docker lo crea root:root y
       # después el deploy no puede escribir ahí.
       - /opt/lis/storage/requirements:/var/www/storage/app/private/requirements:ro
+      # Respaldos: el panel lee el estado de los destinos y borra copias.
+      - /opt/lis/backups:/backups/local
+      - /mnt/lis-backups:/backups/secondary
 
   # Internal-only FastCGI-to-HTTP translator for backend. PHP-FPM doesn't
   # speak HTTP, so broker-gateway/clinical-matcher can't call it directly —
@@ -358,12 +381,15 @@ services:
       REDIS_CLIENT: predis
       LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
       LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
-      # Apagado hasta que Healthbook tenga el feed: sin él, cada corrida es un
-      # 404 en el log. Se prende en el .env de lis-infra y `up -d scheduler`.
-      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-false}
+      # Interruptores del entorno, tri-estado: `false` fuerza la tarea apagada
+      # aunque el panel la prenda; `true` o vacío, decide el panel
+      # (Administración > Sistema > Tareas programadas). La frecuencia también
+      # se edita desde el panel; la variable es sólo el valor inicial.
+      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-}
       MEDICAL_ORDER_PULL_EVERY_SECONDS: ${MEDICAL_ORDER_PULL_EVERY_SECONDS:-15}
-      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
+      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-}
       VIRTUAL_QUEUE_SYNC_EVERY_SECONDS: ${VIRTUAL_QUEUE_SYNC_EVERY_SECONDS:-15}
+      <<: *lis-backup-env
     networks:
       - lis-network
     depends_on:
@@ -371,6 +397,9 @@ services:
         condition: service_healthy
     volumes:
       - backend-storage:/var/www/storage
+      # Respaldos: `backups:run` escribe acá (lis-docs/infra/backups.md).
+      - /opt/lis/backups:/backups/local
+      - /mnt/lis-backups:/backups/secondary
 
   # Worker de colas (driver database, tabla `jobs`). Lo que no puede esperar
   # en un pedido ni frenar el scheduler: el análisis OCR/IA de cada orden
@@ -381,6 +410,10 @@ services:
     image: lis-backend:cebac-current
     container_name: lis-worker
     restart: unless-stopped
+    # --timeout=200 sigue siendo el tope de los jobs comunes; los de respaldo
+    # (RunScheduledTask, VerifyBackup) declaran su propio $timeout de una
+    # hora, y para que el driver database no los re-encole a mitad de camino
+    # DB_QUEUE_RETRY_AFTER tiene que ser mayor que ese timeout.
     command: ["php", "artisan", "queue:work", "--tries=3", "--timeout=200", "--sleep=3", "--max-time=3600"]
     env_file: /opt/lis/lis-backend/.env.prod
     environment:
@@ -391,12 +424,14 @@ services:
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       QUEUE_CONNECTION: database
+      DB_QUEUE_RETRY_AFTER: ${DB_QUEUE_RETRY_AFTER:-3900}
       REDIS_HOST: redis
       REDIS_CLIENT: predis
       LIS_ADAPTER_HEALTHBOOK_BASE_URL: http://adapter-healthbook:3022
       LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN: ${LIS_ADAPTER_HEALTHBOOK_INTERNAL_TOKEN}
-      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-false}
-      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-false}
+      MEDICAL_ORDER_PULL_ENABLED: ${MEDICAL_ORDER_PULL_ENABLED:-}
+      VIRTUAL_QUEUE_SYNC_ENABLED: ${VIRTUAL_QUEUE_SYNC_ENABLED:-}
+      <<: *lis-backup-env
     healthcheck:
       # Hereda el `nc -z 8000` de la imagen del backend, que acá no escucha nada.
       disable: true
@@ -407,6 +442,9 @@ services:
         condition: service_healthy
     volumes:
       - backend-storage:/var/www/storage
+      # Respaldos: "Ejecutar ahora" y "Verificar" corren acá.
+      - /opt/lis/backups:/backups/local
+      - /mnt/lis-backups:/backups/secondary
 
   # Clinical Matcher (FastAPI)
   clinical-matcher:
