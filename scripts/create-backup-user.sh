@@ -53,8 +53,11 @@ echo "==> Asegurando el usuario de respaldos '$db_user' en lis-mysql (base de pr
 # MYSQL_PWD en vez de -p<pass>: así la contraseña de root no queda visible en la
 # lista de procesos del contenedor.
 $COMPOSE exec -T -e MYSQL_PWD="$root_pw" mysql mysql -uroot <<SQL
-CREATE USER IF NOT EXISTS '$db_user'@'%' IDENTIFIED BY '$db_pass';
-ALTER USER '$db_user'@'%' IDENTIFIED BY '$db_pass';
+-- mysql_native_password a propósito: el mysqldump de la imagen del backend es
+-- el de MariaDB y no trae el plugin caching_sha2_password (el default de
+-- MySQL 8); con el default la conexión falla con "Plugin … could not be loaded".
+CREATE USER IF NOT EXISTS '$db_user'@'%' IDENTIFIED WITH mysql_native_password BY '$db_pass';
+ALTER USER '$db_user'@'%' IDENTIFIED WITH mysql_native_password BY '$db_pass';
 -- Lo que pide mysqldump: SELECT + LOCK TABLES (single-transaction igual los
 -- pide para los metadatos), SHOW VIEW, TRIGGER y EVENT para --routines/--triggers/--events.
 GRANT SELECT, LOCK TABLES, SHOW VIEW, TRIGGER, EVENT ON *.* TO '$db_user'@'%';
