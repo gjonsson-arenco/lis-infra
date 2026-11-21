@@ -18,6 +18,18 @@ x-lis-backup-env: &lis-backup-env
   BACKUP_LOCAL_PATH: /backups/local
   BACKUP_SECONDARY_PATH: /backups/secondary
   BACKUP_VERIFY_DATABASE: ${BACKUP_VERIFY_DATABASE:-lis_restore_check}
+  # Tercer destino opcional: un bucket de S3. Vacío = no existe. Se pausa
+  # desde el panel (Subir a S3). Historias clínicas: validar la región con
+  # legales antes de prenderlo en producción.
+  BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+  BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-lis-backups}
+  BACKUP_S3_REGION: ${BACKUP_S3_REGION:-sa-east-1}
+  BACKUP_AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
+  BACKUP_AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
+  BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+  BACKUP_S3_STORAGE_CLASS: ${BACKUP_S3_STORAGE_CLASS:-STANDARD_IA}
+  BACKUP_S3_SSE: ${BACKUP_S3_SSE:-AES256}
+  BACKUP_S3_KMS_KEY_ID: ${BACKUP_S3_KMS_KEY_ID:-}
 # Los dos mounts van repetidos en backend, scheduler y worker (YAML no
 # concatena listas): /opt/lis/backups:/backups/local y /mnt/lis-backups:/backups/secondary.
 
@@ -179,7 +191,14 @@ services:
       - /opt/lis/storage/requirements:/var/www/storage/app/private/requirements:ro
       # Respaldos: el panel lee el estado de los destinos y borra copias.
       - /opt/lis/backups:/backups/local
-      - /mnt/lis-backups:/backups/secondary
+      # Bind con propagación rslave: si el share se monta en el host después
+      # de levantar el contenedor, igual aparece adentro (con el bind corto,
+      # el contenedor seguiría viendo la carpeta vacía de antes del mount).
+      - type: bind
+        source: /mnt/lis-backups
+        target: /backups/secondary
+        bind:
+          propagation: rslave
 
   # Internal-only FastCGI-to-HTTP translator for backend. PHP-FPM doesn't
   # speak HTTP, so broker-gateway/clinical-matcher can't call it directly —
@@ -399,7 +418,14 @@ services:
       - backend-storage:/var/www/storage
       # Respaldos: `backups:run` escribe acá (lis-docs/infra/backups.md).
       - /opt/lis/backups:/backups/local
-      - /mnt/lis-backups:/backups/secondary
+      # Bind con propagación rslave: si el share se monta en el host después
+      # de levantar el contenedor, igual aparece adentro (con el bind corto,
+      # el contenedor seguiría viendo la carpeta vacía de antes del mount).
+      - type: bind
+        source: /mnt/lis-backups
+        target: /backups/secondary
+        bind:
+          propagation: rslave
 
   # Worker de colas (driver database, tabla `jobs`). Lo que no puede esperar
   # en un pedido ni frenar el scheduler: el análisis OCR/IA de cada orden
@@ -444,7 +470,14 @@ services:
       - backend-storage:/var/www/storage
       # Respaldos: "Ejecutar ahora" y "Verificar" corren acá.
       - /opt/lis/backups:/backups/local
-      - /mnt/lis-backups:/backups/secondary
+      # Bind con propagación rslave: si el share se monta en el host después
+      # de levantar el contenedor, igual aparece adentro (con el bind corto,
+      # el contenedor seguiría viendo la carpeta vacía de antes del mount).
+      - type: bind
+        source: /mnt/lis-backups
+        target: /backups/secondary
+        bind:
+          propagation: rslave
 
   # Clinical Matcher (FastAPI)
   clinical-matcher:
