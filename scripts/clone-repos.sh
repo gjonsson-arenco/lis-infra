@@ -52,10 +52,10 @@ REPOS=(
   # Healthbook, el portal del paciente. lis-healthbook-back tampoco va en este
   # stack: el adapter le pega por HEALTHBOOK_API_URL.
   "lis-adapters/lis-adapter-healthbook|lis-adapter-healthbook|main"
-  # La Labcore API (repo api-lis-labcore) NO va en este stack: corre como
-  # servicio de Windows en una máquina del cliente (ver
-  # scripts/build-labcore-api-windows.ps1) y el adapter le pega por
-  # LABCORE_API_URL.
+  # La Labcore API no es un servicio del LIS (es la API sobre la base de
+  # Labcore que consume el adapter), pero se buildea y corre en este stack. El
+  # repo se llama distinto que la carpeta: api-lis-labcore.
+  "labcore-api|api-lis-labcore|main"
 )
 
 mkdir -p "$LIS_ROOT"
@@ -118,9 +118,11 @@ Antes de levantar el stack, para cada repo recién clonado:
      (ver .env.example: MYSQL_*, MYSQL_CHAT_*, LIS_CHAT_CORS_ORIGINS,
      LIS_MATCHER_INTERNAL_TOKEN, LIS_RULES_ENGINE_INTERNAL_TOKEN,
      LIS_ORCHESTRATOR_INTERNAL_TOKEN, LIS_ADAPTER_LABCORE_INTERNAL_TOKEN,
-     LABCORE_API_URL y LABCORE_API_KEY — la Labcore API corre como servicio
-     de Windows en una máquina del cliente, no acá; sin esas dos el adapter
-     no arranca / no autentica; ARCA_CUIT y ARCA_POINT_OF_SALE, obligatorias
+     LABCORE_API_KEY y LABCORE_LIS_CONNECTION_STRING — esta última es la base
+     SQL Server de Labcore, fuera de Docker; sin ella la Labcore API no
+     arranca. Lo que depende de la instalación de Labcore (efector, terminal)
+     va en labcore-api/appsettings.Production.json de lis-infra, no en un
+     .env; ARCA_CUIT y ARCA_POINT_OF_SALE, obligatorias
      para el gateway de facturación; y LIS_REPORTING_SERVICE_INTERNAL_TOKEN,
      sin la cual el servicio de documentos no arranca).
      La base del chat no hay que crearla a mano: la crea

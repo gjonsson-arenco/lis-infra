@@ -4,11 +4,13 @@
     en una máquina del cliente.
 
 .DESCRIPTION
-    La Labcore API (repo api-lis-labcore) no corre en el stack Docker del LIS:
-    el SQL Server de Labcore de CEBAC es 2008 R2 y el driver de .NET desde
-    Linux no pasa del post-login. Desde Windows usa Schannel, como SSMS, y
-    funciona. Este script deja un zip autocontenido (no hace falta instalar
-    .NET en el server del cliente) con:
+    ALTERNATIVA, no el camino normal. Desde el 2026-11-26 la Labcore API corre
+    en el stack Docker del LIS (servicio labcore-api del compose): el cuelgue
+    del driver de .NET contra el SQL Server 2008 R2 RTM de CEBAC era la
+    contramedida BEAST de OpenSSL y la imagen ya la apaga. Este script queda
+    para instalarla como servicio de Windows cuando haga falta (otro cliente
+    sin Docker, o una máquina del cliente al lado del SQL Server). Deja un zip
+    autocontenido (no hace falta instalar .NET en el server del cliente) con:
 
       app\Labcore.Api.exe                 self-contained win-x64, un solo archivo
       app\appsettings.Production.json     la config de ESTA instalación (labcore-api\ de este repo)

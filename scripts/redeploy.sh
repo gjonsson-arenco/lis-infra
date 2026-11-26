@@ -59,6 +59,9 @@ declare -A REPO_SERVICE=(
   [lis-messaging-service]=messaging-service
   [lis-adapters/lis-adapter-labcore]=adapter-labcore
   [lis-adapters/lis-adapter-healthbook]=adapter-healthbook
+  # La API sobre la base de Labcore (repo api-lis-labcore). No es un servicio
+  # del LIS pero se buildea y corre en este stack.
+  [labcore-api]=labcore-api
 )
 
 # Hace git pull --ff-only en $1. Devuelve 0 (éxito) si HEAD cambió, 1 si no
